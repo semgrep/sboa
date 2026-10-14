@@ -149,8 +149,10 @@ sha=$(field "$entry" sha256)
 url_base=$(field "$flat" url_base)
 version=$(field "$flat" python_version)
 release=$(field "$flat" release)
-[ -n "$platform" ] && [ -n "$file" ] && [ -n "$sha" ] && [ -n "$url_base" ] &&
-  [ -n "$version" ] && [ -n "$release" ] || die "incomplete entry for $key in $manifest"
+if [ -z "$platform" ] || [ -z "$file" ] || [ -z "$sha" ] || [ -z "$url_base" ] ||
+   [ -z "$version" ] || [ -z "$release" ]; then
+  die "incomplete entry for $key in $manifest"
+fi
 case "$url_base" in
   https://*) ;;
   *) die "url_base must be an https:// URL, got '$url_base'" ;;
