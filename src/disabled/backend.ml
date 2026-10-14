@@ -10,10 +10,10 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(* pyembed.disabled implementation of the [Backend] primitives: no
+(* sboa.disabled implementation of the [Backend] primitives: no
    interpreter; every primitive that would need one raises [Not_available].
-   [is_initialized] is always false, so [Pyembed.exit] falls back to
-   [Stdlib.exit] and [Pyembed.gc_flush] does nothing. *)
+   [is_initialized] is always false, so [Sboa.exit] falls back to
+   [Stdlib.exit] and [Sboa.gc_flush] does nothing. *)
 
 type obj = unit
 

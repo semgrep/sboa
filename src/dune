@@ -1,10 +1,10 @@
-; The pyembed virtual library. All logic lives in [Pyembed] (pyembed.ml);
+; The sboa virtual library. All logic lives in [Sboa] (sboa.ml);
 ; the virtual module [Backend] is the primitive layer, implemented by
-; pyembed.cpython (C stubs against Python.h) and pyembed.disabled (raises
-; Pyembed.Not_available).
+; sboa.cpython (C stubs against Python.h) and sboa.disabled (raises
+; Sboa.Not_available).
 
 (library
- (name pyembed)
- (public_name pyembed)
+ (name sboa)
+ (public_name sboa)
  (virtual_modules backend)
  (libraries threads.posix unix))

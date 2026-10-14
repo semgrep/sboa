@@ -10,7 +10,7 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 */
-/* pyembed runtime: interpreter initialization, GIL scopes, deferred
+/* sboa runtime: interpreter initialization, GIL scopes, deferred
    reference/root queues, signal routing and process exit.
 
    Initialization follows "Python Initialization Configuration"
@@ -32,7 +32,7 @@
    root instead.
 
    Signals: see setup_signals (POSIX sigaction; CRT signal() on Windows). */
-#include "pyembed_internal.h"
+#include "sboa_internal.h"
 
 #include <errno.h>
 #include <string.h>
@@ -41,15 +41,15 @@
 #include <unistd.h>
 #endif
 
-extern const struct _frozen pyembed_frozen_table[];
-extern const unsigned char pyembed_frozen_magic[4];
+extern const struct _frozen sboa_frozen_table[];
+extern const unsigned char sboa_frozen_magic[4];
 
-int pyembed_initialized = 0;
-unsigned long pyembed_main_ident = 0;
-int pyembed_runtime_released = 0;
-int pyembed_keep_lock = 0;
-volatile sig_atomic_t pyembed_in_python = 0;
-volatile int pyembed_forked_child = 0;
+int sboa_initialized = 0;
+unsigned long sboa_main_ident = 0;
+int sboa_runtime_released = 0;
+int sboa_keep_lock = 0;
+volatile sig_atomic_t sboa_in_python = 0;
+volatile int sboa_forked_child = 0;
 
 /* Set by the signal handler when it hands a signal to Python
    (PyErr_SetInterruptEx); see hand_late_signal_to_ocaml. */
@@ -58,7 +58,7 @@ static volatile sig_atomic_t routed_signal = 0;
 /* Set when the handler chained a signal to OCaml's handler: the OCaml
    handler has not necessarily run yet (it runs at a poll point of whichever
    systhread holds the domain lock), so the main thread must not release the
-   lock until it has polled. Cleared by pyembed_py_leave, after which the
+   lock until it has polled. Cleared by sboa_py_leave, after which the
    main thread runs OCaml code holding the lock. (OCaml's own pending-signal
    state is not public API.) */
 static volatile sig_atomic_t ocaml_signal_hint = 0;
@@ -67,12 +67,12 @@ static volatile sig_atomic_t ocaml_signal_hint = 0;
    retrying Py_InitializeFromConfig (which must run at most once). */
 static char *init_error = NULL;
 
-void pyembed_check_gil(void) {
+void sboa_check_gil(void) {
   /* A thread holds the GIL iff it has a current thread state
      (init.html#c.PyThreadState_GetUnchecked). A TLS read. */
   if (PyThreadState_GetUnchecked() == NULL)
     caml_invalid_argument(
-        "Pyembed: a gil token was used without holding the GIL (outside its "
+        "Sboa: a gil token was used without holding the GIL (outside its "
         "with_gil scope, inside detach, or on another thread)");
 }
 
@@ -88,25 +88,25 @@ static void hand_late_signal_to_ocaml(void);
    run on whichever systhread takes the lock next, and Sys.Break belongs to
    this thread; it runs at this thread's next poll point. */
 static int release_runtime(void) {
-  if (pyembed_runtime_released || ocaml_signal_hint) return 0;
+  if (sboa_runtime_released || ocaml_signal_hint) return 0;
   caml_enter_blocking_section_no_pending();
-  pyembed_runtime_released = 1;
+  sboa_runtime_released = 1;
   return 1;
 }
 
 static void reacquire_runtime(int released) {
   if (released) {
     caml_leave_blocking_section();
-    pyembed_runtime_released = 0;
+    sboa_runtime_released = 0;
   }
 }
 
-pyembed_py_section pyembed_py_enter(void) {
-  pyembed_py_section s;
-  s.prev_in_python = pyembed_in_python;
+sboa_py_section sboa_py_enter(void) {
+  sboa_py_section s;
+  s.prev_in_python = sboa_in_python;
   /* Python owns the signals from before the lock is released. */
-  pyembed_in_python = 1;
-  s.released = !pyembed_keep_lock && release_runtime();
+  sboa_in_python = 1;
+  s.released = !sboa_keep_lock && release_runtime();
   return s;
 }
 
@@ -117,13 +117,13 @@ static _Atomic(void *) root_queue; /* forward: see roots below */
    Python, never to an OCaml handler that another systhread (holding the
    lock meanwhile) would run. Such a late signal is handed to OCaml on this
    thread right after (hand_late_signal_to_ocaml). */
-void pyembed_py_leave(pyembed_py_section s) {
+void sboa_py_leave(sboa_py_section s) {
   reacquire_runtime(s.released);
   ocaml_signal_hint = 0;
-  pyembed_in_python = s.prev_in_python;
+  sboa_in_python = s.prev_in_python;
   if (!s.prev_in_python && routed_to_python) hand_late_signal_to_ocaml();
-  if (!pyembed_runtime_released && atomic_load(&root_queue) != NULL)
-    pyembed_drain_roots();
+  if (!sboa_runtime_released && atomic_load(&root_queue) != NULL)
+    sboa_drain_roots();
 }
 
 /* ------------------------------------------------------------------------ */
@@ -137,7 +137,7 @@ struct decref_node {
 static _Atomic(struct decref_node *) decref_queue;
 static atomic_long decref_count;
 
-void pyembed_defer_decref(PyObject *o) {
+void sboa_defer_decref(PyObject *o) {
   struct decref_node *n = malloc(sizeof *n);
   if (n == NULL) return; /* out of memory: leak the reference rather than crash */
   n->obj = o;
@@ -148,7 +148,7 @@ void pyembed_defer_decref(PyObject *o) {
   atomic_fetch_add(&decref_count, 1);
 }
 
-void pyembed_drain_decrefs(void) {
+void sboa_drain_decrefs(void) {
   /* A DECREF may run __del__, which may queue more; loop until empty. */
   struct decref_node *n;
   while ((n = atomic_exchange(&decref_queue, NULL)) != NULL) {
@@ -163,7 +163,7 @@ void pyembed_drain_decrefs(void) {
 }
 
 /* Drains run __del__ methods (Python code) while OCaml owns the signals
-   (pyembed_in_python == 0) and with the domain lock held: a KeyboardInterrupt
+   (sboa_in_python == 0) and with the domain lock held: a KeyboardInterrupt
    raised inside __del__ would be swallowed as "unraisable", so signals must
    not be routed to Python there. */
 
@@ -177,7 +177,7 @@ struct root_node {
 
 static atomic_long live_roots;
 
-value *pyembed_new_root(value v) {
+value *sboa_new_root(value v) {
   value *r = malloc(sizeof *r);
   if (r == NULL) caml_raise_out_of_memory();
   *r = v;
@@ -192,10 +192,10 @@ static void remove_root(value *r) {
   atomic_fetch_sub(&live_roots, 1);
 }
 
-void pyembed_release_root(value *r) {
+void sboa_release_root(value *r) {
   /* The main-thread flags are only meaningful on the main thread. */
-  if (pyembed_initialized && PyThread_get_thread_ident() == pyembed_main_ident &&
-      !pyembed_runtime_released) {
+  if (sboa_initialized && PyThread_get_thread_ident() == sboa_main_ident &&
+      !sboa_runtime_released) {
     remove_root(r);
     return;
   }
@@ -208,7 +208,7 @@ void pyembed_release_root(value *r) {
   } while (!atomic_compare_exchange_weak(&root_queue, &head, n));
 }
 
-void pyembed_drain_roots(void) {
+void sboa_drain_roots(void) {
   struct root_node *n = atomic_exchange(&root_queue, NULL);
   while (n != NULL) {
     struct root_node *next = n->next;
@@ -218,11 +218,11 @@ void pyembed_drain_roots(void) {
   }
 }
 
-value pyembed_pending_decrefs(value unit) {
+value sboa_pending_decrefs(value unit) {
   return Val_long(atomic_load(&decref_count));
 }
 
-value pyembed_live_roots(value unit) {
+value sboa_live_roots(value unit) {
   return Val_long(atomic_load(&live_roots));
 }
 
@@ -230,28 +230,28 @@ value pyembed_live_roots(value unit) {
 /* Thread checks and GIL scopes                                              */
 
 #ifndef _WIN32 /* no fork on Windows */
-static void on_fork_child(void) { pyembed_forked_child = 1; }
+static void on_fork_child(void) { sboa_forked_child = 1; }
 #endif
 
-value pyembed_is_initialized(value unit) {
-  return Val_bool(pyembed_initialized);
+value sboa_is_initialized(value unit) {
+  return Val_bool(sboa_initialized);
 }
 
-value pyembed_thread_ok(value unit) {
-  if (!pyembed_initialized) return Val_true;
-  return Val_bool(!pyembed_forked_child &&
-                  PyThread_get_thread_ident() == pyembed_main_ident);
+value sboa_thread_ok(value unit) {
+  if (!sboa_initialized) return Val_true;
+  return Val_bool(!sboa_forked_child &&
+                  PyThread_get_thread_ident() == sboa_main_ident);
 }
 
-value pyembed_init_failed(value unit) { return Val_bool(init_error != NULL); }
+value sboa_init_failed(value unit) { return Val_bool(init_error != NULL); }
 
-value pyembed_init_error(value unit) {
+value sboa_init_error(value unit) {
   return caml_copy_string(init_error != NULL ? init_error : "");
 }
 
 /* PyGILState_Ensure, releasing the domain lock while it may block, then
    drain the queues. Returns (PyGILState_STATE | previous keep flag << 1). */
-value pyembed_gil_ensure(value v_keep) {
+value sboa_gil_ensure(value v_keep) {
   PyGILState_STATE st;
   if (PyThreadState_GetUnchecked() != NULL) {
     /* This thread already holds the GIL: Ensure only bumps a counter. */
@@ -259,63 +259,63 @@ value pyembed_gil_ensure(value v_keep) {
   } else {
     /* While waiting for the GIL, signals go to Python (and are handed back
        below), never to an OCaml handler another systhread would run. */
-    sig_atomic_t prev_in_python = pyembed_in_python;
-    pyembed_in_python = 1;
+    sig_atomic_t prev_in_python = sboa_in_python;
+    sboa_in_python = 1;
     int released = release_runtime();
     st = PyGILState_Ensure();
     reacquire_runtime(released);
-    pyembed_in_python = prev_in_python;
+    sboa_in_python = prev_in_python;
   }
   /* Main thread, both locks held, OCaml about to run. */
-  if (!pyembed_in_python && routed_to_python) hand_late_signal_to_ocaml();
-  pyembed_drain_decrefs();
-  pyembed_drain_roots();
-  int prev_keep = pyembed_keep_lock;
-  pyembed_keep_lock = Bool_val(v_keep);
+  if (!sboa_in_python && routed_to_python) hand_late_signal_to_ocaml();
+  sboa_drain_decrefs();
+  sboa_drain_roots();
+  int prev_keep = sboa_keep_lock;
+  sboa_keep_lock = Bool_val(v_keep);
   return Val_int((st == PyGILState_LOCKED ? 1 : 0) | (prev_keep << 1));
 }
 
-value pyembed_gil_release(value v_st) {
+value sboa_gil_release(value v_st) {
   int st = Int_val(v_st);
-  pyembed_keep_lock = (st >> 1) & 1;
+  sboa_keep_lock = (st >> 1) & 1;
   PyGILState_Release((st & 1) ? PyGILState_LOCKED : PyGILState_UNLOCKED);
   return Val_unit;
 }
 
 /* detach: PyEval_SaveThread; the saved state is found again through
    PyGILState_GetThisThreadState (init.html#c.PyGILState_GetThisThreadState). */
-value pyembed_save_thread(value unit) {
-  pyembed_check_gil();
+value sboa_save_thread(value unit) {
+  sboa_check_gil();
   (void)PyEval_SaveThread();
   return Val_unit;
 }
 
-value pyembed_restore_thread(value unit) {
+value sboa_restore_thread(value unit) {
   PyThreadState *ts = PyGILState_GetThisThreadState();
-  sig_atomic_t prev_in_python = pyembed_in_python;
-  pyembed_in_python = 1;
+  sig_atomic_t prev_in_python = sboa_in_python;
+  sboa_in_python = 1;
   int released = release_runtime();
   PyEval_RestoreThread(ts);
   reacquire_runtime(released);
-  pyembed_in_python = prev_in_python;
-  if (!pyembed_in_python && routed_to_python) hand_late_signal_to_ocaml();
-  pyembed_drain_decrefs();
-  pyembed_drain_roots();
+  sboa_in_python = prev_in_python;
+  if (!sboa_in_python && routed_to_python) hand_late_signal_to_ocaml();
+  sboa_drain_decrefs();
+  sboa_drain_roots();
   return Val_unit;
 }
 
-value pyembed_drain(value unit) {
-  pyembed_check_gil();
-  pyembed_drain_decrefs();
-  pyembed_drain_roots();
+value sboa_drain(value unit) {
+  sboa_check_gil();
+  sboa_drain_decrefs();
+  sboa_drain_roots();
   return Val_unit;
 }
 
-value pyembed_gc_collect(value unit) {
-  pyembed_check_gil();
-  pyembed_py_section s = pyembed_py_enter();
+value sboa_gc_collect(value unit) {
+  sboa_check_gil();
+  sboa_py_section s = sboa_py_enter();
   Py_ssize_t n = PyGC_Collect();
-  pyembed_py_leave(s);
+  sboa_py_leave(s);
   return Val_long(n);
 }
 
@@ -323,9 +323,9 @@ value pyembed_gc_collect(value unit) {
 /* Signals                                                                   */
 
 /* SIGINT and SIGTERM have one owner at a time. If OCaml had installed a
-   handler for the signal before init (e.g. Sys.catch_break true), pyembed
+   handler for the signal before init (e.g. Sys.catch_break true), sboa
    installs its own C handler which, while Python owns the main thread
-   (pyembed_in_python), calls PyErr_SetInterruptEx (async-signal-safe,
+   (sboa_in_python), calls PyErr_SetInterruptEx (async-signal-safe,
    exceptions.html#c.PyErr_SetInterruptEx) so Python raises KeyboardInterrupt
    at its next bytecode boundary or EINTR; otherwise it chains to the saved
    OCaml handler, which only records the signal for the next OCaml poll
@@ -341,7 +341,7 @@ static int routed[N_ROUTED];
    Python owns the main thread (PyErr_SetInterruptEx is async-signal-safe and
    exists on Windows too), else tell the caller to chain to OCaml. */
 static int route_to_python(int sig) {
-  if (pyembed_in_python) {
+  if (sboa_in_python) {
     routed_signal = sig;
     routed_to_python = 1;
     (void)PyErr_SetInterruptEx(sig);
@@ -358,15 +358,15 @@ static int route_to_python(int sig) {
    (which re-installs *itself* the same way). SIGINT handlers run on a
    thread the console creates; SIGTERM is never raised by the OS but is
    routed anyway (raise()). */
-typedef void (*pyembed_sighandler)(int);
-static pyembed_sighandler saved_handlers[N_ROUTED];
+typedef void (*sboa_sighandler)(int);
+static sboa_sighandler saved_handlers[N_ROUTED];
 
 static void route_signal(int sig) {
   int saved_errno = errno;
   int i = (sig == SIGINT) ? 0 : 1;
   signal(sig, route_signal);
   if (!route_to_python(sig)) {
-    pyembed_sighandler h = saved_handlers[i];
+    sboa_sighandler h = saved_handlers[i];
     if (h != SIG_DFL && h != SIG_IGN && h != SIG_ERR) {
       h(sig);
       signal(sig, route_signal);
@@ -383,7 +383,7 @@ static void install_route(int i) {
    (then the disposition is left as it was). signal() can only read the
    current handler by replacing it, so it is put back. */
 static int save_ocaml_handler(int i) {
-  pyembed_sighandler cur = signal(routed_signals[i], SIG_DFL);
+  sboa_sighandler cur = signal(routed_signals[i], SIG_DFL);
   if (cur == SIG_ERR) return 0;
   signal(routed_signals[i], cur);
   if (cur == SIG_DFL || cur == SIG_IGN || cur == route_signal) return 0;
@@ -429,11 +429,11 @@ static int save_ocaml_handler(int i) {
 
 /* A signal was handed to Python (routed_to_python) but the main thread has
    left Python since, so Python may never look at it. Main thread, GIL and
-   domain lock held, pyembed_in_python == 0. If the Python handler is still
+   domain lock held, sboa_in_python == 0. If the Python handler is still
    pending, run it now (PyErr_CheckSignals, exceptions.html) without
    disturbing the current error indicator, and if it raised (the default
    handler raises KeyboardInterrupt) re-deliver the signal to this thread
-   with raise(3): route_signal runs synchronously, sees pyembed_in_python ==
+   with raise(3): route_signal runs synchronously, sees sboa_in_python ==
    0 and chains to OCaml's handler, which records it for this thread's next
    poll point, so Sys.Break is raised on the main thread exactly once. If Python
    already handled the signal (KeyboardInterrupt in the call that just
@@ -473,7 +473,7 @@ static PyObject *signal_wrapper(PyObject *self, PyObject *const *args,
 static PyMethodDef signal_wrapper_def = {
     "signal", (PyCFunction)(void (*)(void))signal_wrapper, METH_FASTCALL,
     "signal($module, signalnum, handler, /)\n--\n\n"
-    "Set the action for the given signal (pyembed keeps routing SIGINT and "
+    "Set the action for the given signal (sboa keeps routing SIGINT and "
     "SIGTERM between OCaml and Python)."};
 
 /* Called with the GIL held, right after Py_InitializeFromConfig. Returns 0
@@ -523,7 +523,7 @@ static int setup_signals(int handle) {
 /* Initialization                                                            */
 
 static int frozen_table_has(const char *name) {
-  for (const struct _frozen *p = pyembed_frozen_table; p->name != NULL; p++)
+  for (const struct _frozen *p = sboa_frozen_table; p->name != NULL; p++)
     if (strcmp(p->name, name) == 0) return 1;
   return 0;
 }
@@ -538,7 +538,7 @@ static void format_python_error(char *buf, size_t n, const char *what) {
   PyObject *s = exc ? PyObject_Str(exc) : NULL;
   const char *msg = s ? PyUnicode_AsUTF8(s) : NULL;
   if (msg == NULL) PyErr_Clear();
-  snprintf(buf, n, "pyembed: %s: %s: %s", what,
+  snprintf(buf, n, "sboa: %s: %s: %s", what,
            exc ? Py_TYPE(exc)->tp_name : "?", msg ? msg : "?");
   Py_XDECREF(s);
   Py_XDECREF(exc);
@@ -546,33 +546,33 @@ static void format_python_error(char *buf, size_t n, const char *what) {
 
 /* Install the frozen bootstrap importer over the registered bundles. */
 static int install_importer(void) {
-  if (!frozen_table_has("_pyembed_importer")) return 0;
-  PyObject *pyembed = PyImport_ImportModule("_pyembed");
-  PyObject *imp = pyembed ? PyImport_ImportModule("_pyembed_importer") : NULL;
+  if (!frozen_table_has("_sboa_importer")) return 0;
+  PyObject *sboa = PyImport_ImportModule("_sboa");
+  PyObject *imp = sboa ? PyImport_ImportModule("_sboa_importer") : NULL;
   PyObject *r = NULL;
   if (imp != NULL) {
-    PyObject *b = PyObject_CallMethod(pyembed, "bundles", NULL);
-    PyObject *l = b ? PyObject_CallMethod(pyembed, "libdynload_dir", NULL) : NULL;
-    PyObject *d = l ? PyObject_CallMethod(pyembed, "dev_overrides", NULL) : NULL;
+    PyObject *b = PyObject_CallMethod(sboa, "bundles", NULL);
+    PyObject *l = b ? PyObject_CallMethod(sboa, "libdynload_dir", NULL) : NULL;
+    PyObject *d = l ? PyObject_CallMethod(sboa, "dev_overrides", NULL) : NULL;
     if (d != NULL) r = PyObject_CallMethod(imp, "install", "OOO", b, l, d);
     Py_XDECREF(b);
     Py_XDECREF(l);
     Py_XDECREF(d);
   }
-  Py_XDECREF(pyembed);
+  Py_XDECREF(sboa);
   Py_XDECREF(imp);
   if (r == NULL) return -1;
   Py_DECREF(r);
   return 0;
 }
 
-/* pyembed_init : Backend.init_args -> unit. Field order follows the record
+/* sboa_init : Backend.init_args -> unit. Field order follows the record
    in backend.mli. Runs on the calling thread, which becomes the main
    thread. */
-value pyembed_init(value args) {
+value sboa_init(value args) {
   CAMLparam1(args);
   if (init_error != NULL) caml_failwith(init_error);
-  if (pyembed_initialized) CAMLreturn(Val_unit);
+  if (sboa_initialized) CAMLreturn(Val_unit);
   value v_prog = Field(args, 0), v_argv = Field(args, 1),
         v_home = Field(args, 2), v_path = Field(args, 3),
         v_dynload = Field(args, 4), v_dev = Field(args, 5),
@@ -582,13 +582,13 @@ value pyembed_init(value args) {
 
   /* Builtin modules must be in the inittab before Py_Initialize
      (import.html#c.PyImport_AppendInittab). */
-  pyembed_module_setup(v_bundles, v_dynload, v_dev);
-  pyembed_exports_setup(v_functions, v_classes, v_methods);
+  sboa_module_setup(v_bundles, v_dynload, v_dev);
+  sboa_exports_setup(v_functions, v_classes, v_methods);
 
   /* Custom frozen modules are consulted before the stdlib ones
      (import.html#c.PyImport_FrozenModules). */
-  if (pyembed_frozen_table[0].name != NULL)
-    PyImport_FrozenModules = pyembed_frozen_table;
+  if (sboa_frozen_table[0].name != NULL)
+    PyImport_FrozenModules = sboa_frozen_table;
 
   /* UTF-8 mode (PEP 540). The isolated configuration does not configure
      the LC_CTYPE locale, which would leave the filesystem, stdio and
@@ -603,7 +603,7 @@ value pyembed_init(value args) {
   PyStatus st = Py_PreInitialize(&pre);
   if (PyStatus_Exception(st)) {
     char buf[1024];
-    snprintf(buf, sizeof buf, "pyembed: Py_PreInitialize: %s%s%s",
+    snprintf(buf, sizeof buf, "sboa: Py_PreInitialize: %s%s%s",
              st.func ? st.func : "", st.func ? ": " : "",
              st.err_msg ? st.err_msg : "failed");
     init_error = caml_stat_strdup(buf);
@@ -649,46 +649,46 @@ value pyembed_init(value args) {
   PyConfig_Clear(&config);
   if (PyStatus_Exception(st)) {
     char buf[1024];
-    snprintf(buf, sizeof buf, "pyembed: Py_InitializeFromConfig: %s%s%s",
+    snprintf(buf, sizeof buf, "sboa: Py_InitializeFromConfig: %s%s%s",
              st.func ? st.func : "", st.func ? ": " : "",
              st.err_msg ? st.err_msg : "failed");
     init_error = caml_stat_strdup(buf);
     caml_failwith(buf);
   }
 
-  pyembed_main_ident = PyThread_get_thread_ident();
+  sboa_main_ident = PyThread_get_thread_ident();
 #ifndef _WIN32
   pthread_atfork(NULL, NULL, on_fork_child);
 #endif
-  pyembed_initialized = 1;
+  sboa_initialized = 1;
 
   char err[2048];
   int failed = 0;
   /* Frozen code must come from this exact interpreter version
      (import.html#c.PyImport_GetMagicNumber: the 4 magic bytes, little
      endian). */
-  if (pyembed_frozen_table[0].name != NULL) {
-    const unsigned char *mg = pyembed_frozen_magic;
+  if (sboa_frozen_table[0].name != NULL) {
+    const unsigned char *mg = sboa_frozen_magic;
     long want = (long)mg[0] | (long)mg[1] << 8 | (long)mg[2] << 16 | (long)mg[3] << 24;
     long have = PyImport_GetMagicNumber();
     if (have != want) {
       PyErr_Clear();
       snprintf(err, sizeof err,
-               "pyembed: frozen modules were compiled for bytecode magic %ld, "
+               "sboa: frozen modules were compiled for bytecode magic %ld, "
                "this interpreter has %ld",
                want, have);
       failed = 1;
     }
   }
-  /* Creates _pyembed.OCamlError; then the bundle importer, then signals. */
-  PyObject *m = failed ? NULL : PyImport_ImportModule("_pyembed");
+  /* Creates _sboa.OCamlError; then the bundle importer, then signals. */
+  PyObject *m = failed ? NULL : PyImport_ImportModule("_sboa");
   if (!failed && m == NULL) {
-    format_python_error(err, sizeof err, "import _pyembed");
+    format_python_error(err, sizeof err, "import _sboa");
     failed = 1;
   }
   Py_XDECREF(m);
   if (!failed && install_importer() != 0) {
-    format_python_error(err, sizeof err, "installing _pyembed_importer");
+    format_python_error(err, sizeof err, "installing _sboa_importer");
     failed = 1;
   }
   if (!failed && setup_signals(Bool_val(v_signals)) != 0) {
@@ -733,9 +733,9 @@ static int flush_std(const char *name) {
    wait for non-daemon threads (threading._shutdown, only if threading was
    imported), run atexit callbacks, flush sys.stdout/sys.stderr. Returns
    false if a flush failed. */
-value pyembed_finish(value unit) {
-  pyembed_check_gil();
-  pyembed_py_section s = pyembed_py_enter();
+value sboa_finish(value unit) {
+  sboa_check_gil();
+  sboa_py_section s = sboa_py_enter();
   PyObject *modules = PyImport_GetModuleDict(); /* borrowed */
   PyObject *threading = PyDict_GetItemString(modules, "threading"); /* borrowed */
   if (threading != NULL) {
@@ -755,6 +755,6 @@ value pyembed_finish(value unit) {
   }
   int ok = flush_std("stdout") == 0;
   ok = (flush_std("stderr") == 0) && ok;
-  pyembed_py_leave(s);
+  sboa_py_leave(s);
   return Val_bool(ok);
 }

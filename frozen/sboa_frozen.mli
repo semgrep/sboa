@@ -12,11 +12,11 @@
 *)
 (** The frozen-module table of the embedding executable.
 
-    Linking the [pyembed.frozen] library is all that is needed: it is built
+    Linking the [sboa.frozen] library is all that is needed: it is built
     with [-linkall] and its initialization references the C object holding
-    [pyembed_frozen_table] (the bundle importer and the [encodings] package),
-    so that table replaces the empty default of [pyembed.cpython] and
-    {!Pyembed.init} installs the importer over the registered bundles. *)
+    [sboa_frozen_table] (the bundle importer and the [encodings] package),
+    so that table replaces the empty default of [sboa.cpython] and
+    {!Sboa.init} installs the importer over the registered bundles. *)
 
 val linked : bool
 (** Always [true]; evaluating the module forces the C table to be linked. *)

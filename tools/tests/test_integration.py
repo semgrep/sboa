@@ -12,7 +12,7 @@
 #
 """Integration test: bundle a real uv project and import it from the bundles.
 
-Driven by a JSON config named by ``PYEMBED_IT_CONFIG`` (skipped when unset) so this
+Driven by a JSON config named by ``SBOA_IT_CONFIG`` (skipped when unset) so this
 package stays free of any knowledge of the project under test::
 
   {
@@ -27,7 +27,7 @@ package stays free of any knowledge of the project under test::
   }
 
 Steps: ``uv export`` -> ``fetch-wheels`` (pure-wheel policy, cached in
-``PYEMBED_WHEEL_CACHE``, default ``/tmp/pyembed-wheels``) -> ``bundle`` the closure
+``SBOA_WHEEL_CACHE``, default ``/tmp/sboa-wheels``) -> ``bundle`` the closure
 with ``--lock`` -> ``bundle`` the project sources -> import with ``sys.path = []``
 and the interpreter's ``lib-dynload``.  The unpatched sources are expected to fail
 where configured; a scratch copy with the patches applied must import.  Sizes and
@@ -50,11 +50,11 @@ from conftest import LIBDYNLOAD_DIR
 from conftest import run_tool
 from conftest import STDLIB_DIR
 
-CONFIG = os.environ.get("PYEMBED_IT_CONFIG")
+CONFIG = os.environ.get("SBOA_IT_CONFIG")
 
 
 def host_platform() -> str:
-    """cpython-embed platform name of the interpreter running the test (which is
+    """sboa platform name of the interpreter running the test (which is
     the embedded interpreter: the test imports from bundles compiled by it)."""
     import platform
 
@@ -71,15 +71,15 @@ def host_platform() -> str:
 TARGET = ["--python-version", sys.version.split()[0], "--platform", host_platform()]
 UV = shutil.which("uv") or str(Path.home() / ".local/bin/uv")
 
-pytestmark = pytest.mark.skipif(CONFIG is None, reason="PYEMBED_IT_CONFIG not set")
+pytestmark = pytest.mark.skipif(CONFIG is None, reason="SBOA_IT_CONFIG not set")
 
 IMPORT_SCRIPT = r"""
 import json, sys, time
 t0 = time.perf_counter()
-_m = type(sys)("_pyembed_importer")
+_m = type(sys)("_sboa_importer")
 with open(sys.argv[1], "rb") as f:
-    exec(compile(f.read(), "<frozen _pyembed_importer>", "exec"), _m.__dict__)
-sys.modules["_pyembed_importer"] = _m
+    exec(compile(f.read(), "<frozen _sboa_importer>", "exec"), _m.__dict__)
+sys.modules["_sboa_importer"] = _m
 sys.path[:] = []
 sys.path_importer_cache.clear()
 bundles = []
@@ -96,7 +96,7 @@ except BaseException:
     sys.exit(3)
 t2 = time.perf_counter()
 fs = sorted(n for n, m in list(sys.modules.items())
-            if isinstance(getattr(m, "__file__", None), str) and not m.__file__.startswith("<pyembed:"))
+            if isinstance(getattr(m, "__file__", None), str) and not m.__file__.startswith("<sboa:"))
 print(json.dumps({"install_ms": (t1 - t0) * 1e3, "import_ms": (t2 - t1) * 1e3,
                   "modules": len(sys.modules), "filesystem_modules": fs}))
 """
@@ -162,7 +162,7 @@ def test_uv_project(tmp_path: Path) -> None:
             stdout=f,
             check=True,
         )
-    cache = Path(os.environ.get("PYEMBED_WHEEL_CACHE", "/tmp/pyembed-wheels"))
+    cache = Path(os.environ.get("SBOA_WHEEL_CACHE", "/tmp/sboa-wheels"))
     fetch = [
         "fetch-wheels",
         "--lock",

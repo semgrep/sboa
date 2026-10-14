@@ -1,4 +1,4 @@
-; pyembed.stdlib: the CPython standard library of the toolchain (../toolchain),
+; sboa.stdlib: the standard library of the CPython built against (../toolchain),
 ; compiled to bytecode and embedded in the executable (.incbin). The
 ; generated Stdlib_bundle module registers it at priority 0: the stdlib is
 ; searched before every application bundle, so third-party code cannot shadow
@@ -7,12 +7,12 @@
 ; registration side effect would otherwise be dropped at link time.
 ;
 ; The stdlib tree is not a dune dependency: it only changes when the toolchain
-; rule runs again, which rewrites cpython-embed.config (a dependency).
+; rule runs again, which rewrites sboa.config (a dependency).
 
 (library
- (name pyembed_stdlib)
- (public_name pyembed.stdlib)
- (libraries pyembed)
+ (name sboa_stdlib)
+ (public_name sboa.stdlib)
+ (libraries sboa)
  (modules stdlib_bundle)
  (library_flags (-linkall))
  (foreign_stubs
@@ -32,9 +32,9 @@
    %{dep:../probe.sh}
    --exec-python
    -I
-   %{dep:../tools/pyembed_bundle.py}
-   --cpython-config
-   %{dep:../toolchain/cpython-embed.config}
+   %{dep:../tools/sboa_bundle.py}
+   --config
+   %{dep:../toolchain/sboa.config}
    stdlib
    --name
    stdlib

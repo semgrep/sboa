@@ -10,13 +10,13 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(** Primitive layer of [pyembed] (virtual module).
+(** Primitive layer of [sboa] (virtual module).
 
-    This is the boundary between the OCaml bridge logic in {!Pyembed} and an
-    implementation: [pyembed.cpython] binds each value to a C stub against
-    [Python.h]; [pyembed.disabled] raises {!Not_available} from every
-    primitive that needs an interpreter. Nothing outside [pyembed] should use
-    this module: it is unsafe by design (it trusts {!Pyembed} to call it on
+    This is the boundary between the OCaml bridge logic in {!Sboa} and an
+    implementation: [sboa.cpython] binds each value to a C stub against
+    [Python.h]; [sboa.disabled] raises {!Not_available} from every
+    primitive that needs an interpreter. Nothing outside [sboa] should use
+    this module: it is unsafe by design (it trusts {!Sboa} to call it on
     the right thread with the right locks).
 
     Conventions for the cpython implementation:
@@ -27,7 +27,7 @@
       lock around that code (unless the enclosing {!gil_ensure} asked to keep
       it), so other OCaml systhreads keep running.
     - When a Python API call fails, the stub moves the raised Python exception
-      into a pending slot and raises {!Pending}; {!Pyembed} then calls
+      into a pending slot and raises {!Pending}; {!Sboa} then calls
       {!take_pending} and translates it. Stubs never raise while holding a GIL
       state they acquired themselves.
     - [set_error_*] primitives set the Python error indicator (for the export
@@ -91,7 +91,7 @@ type init_args = {
   bundles : (string * data) array;  (** in search order *)
 }
 (** Everything [init] needs, copied to C before the interpreter starts. Field
-    order is read by position in C (pyembed_init). *)
+    order is read by position in C (sboa_init). *)
 
 (** {2 Lifecycle} *)
 
@@ -295,7 +295,7 @@ val set_error_system_exit : int -> unit
 (** [SystemExit(code)]. *)
 
 val set_error_ocaml : string -> exn * Printexc.raw_backtrace -> unit
-(** [_pyembed.OCamlError(msg)] carrying a capsule that roots the pair. *)
+(** [_sboa.OCamlError(msg)] carrying a capsule that roots the pair. *)
 
 (** {2 Exports} *)
 
@@ -314,7 +314,7 @@ val class_unwrap : int -> obj -> Obj.t option
 (** {2 Counters} *)
 
 val counter_ptr : obj -> nativeint
-(** Address of the atomic of a [_pyembed.Counter] instance, or [0n] if the
+(** Address of the atomic of a [_sboa.Counter] instance, or [0n] if the
     object is not exactly a [Counter]. *)
 
 val new_ref : obj -> obj

@@ -10,10 +10,10 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(* pyembed: the OCaml side of the CPython bridge.
+(* sboa: the OCaml side of the CPython bridge.
 
    All bridge logic lives here; [Backend] is the primitive layer (C stubs in
-   pyembed.cpython, [Not_available] in pyembed.disabled). The pieces:
+   sboa.cpython, [Not_available] in sboa.disabled). The pieces:
 
    - GIL scopes: [with_gil] -> Backend.gil_ensure/gil_release (which also
      drain the deferred DECREF/root queues); [detach] -> save/restore thread.
@@ -23,7 +23,7 @@
      OCamlError, anything else) and raises the matching OCaml exception.
    - Exports: [Export.*] append to process-global registries (they run as
      top-level effects before [init], which freezes them into [table]). The
-     C trampoline calls [dispatch idx] (registered under "pyembed.dispatch")
+     C trampoline calls [dispatch idx] (registered under "sboa.dispatch")
      with the GIL released; [dispatch] re-takes it, reads the call's
      arguments, runs the entry inside a fresh callable scope, and on any
      OCaml exception sets the Python error indicator ([set_python_error]) and
@@ -39,7 +39,7 @@ module B = Backend
 type gil = unit
 
 (* [Fun.protect] without its [Finally_raised] wrapping (the repo's rules
-   forbid Fun.protect; pyembed stays free of semgrep's libraries). *)
+   forbid Fun.protect; sboa depends on no other library). *)
 let protect ~finally f =
   match f () with
   | v ->
@@ -125,11 +125,10 @@ let conv_error_to_string e =
 
 let () =
   Printexc.register_printer (function
-    | Python_error e ->
-        Some ("Pyembed.Python_error: " ^ Python_error.to_string e)
+    | Python_error e -> Some ("Sboa.Python_error: " ^ Python_error.to_string e)
     | Conversion_error e ->
-        Some ("Pyembed.Conversion_error: " ^ conv_error_to_string e)
-    | System_exit n -> Some (Printf.sprintf "Pyembed.System_exit %d" n)
+        Some ("Sboa.Conversion_error: " ^ conv_error_to_string e)
+    | System_exit n -> Some (Printf.sprintf "Sboa.System_exit %d" n)
     | _ -> None)
 
 (* Translate the Python exception a stub left pending. *)
@@ -247,10 +246,9 @@ let exn_mappings_rev :
 
 let check_registration what =
   if not (Domain.is_main_domain ()) then
-    invalid_arg (Printf.sprintf "Pyembed.%s: only on the main domain" what);
+    invalid_arg (Printf.sprintf "Sboa.%s: only on the main domain" what);
   if Atomic.get frozen then
-    invalid_arg
-      (Printf.sprintf "Pyembed.%s: must be called before Pyembed.init" what)
+    invalid_arg (Printf.sprintf "Sboa.%s: must be called before Sboa.init" what)
 
 let add_entry e =
   let i = Atomic.get n_entries in
@@ -394,12 +392,11 @@ let init (c : Config.t) =
   | Some prev ->
       if not (Config.equal prev c) then
         invalid_arg
-          "Pyembed.init: Python is already initialized with a different \
+          "Sboa.init: Python is already initialized with a different \
            configuration (an earlier init, or with_gil's Config.default ())"
   | None ->
       if not (on_main_thread ()) then
-        invalid_arg
-          "Pyembed.init: must run on the main thread of the main domain";
+        invalid_arg "Sboa.init: must run on the main thread of the main domain";
       let args = init_args c in
       Atomic.set table @@ Array.of_list (List.rev (Atomic.get entries_rev));
       protect
@@ -413,8 +410,8 @@ let init (c : Config.t) =
 let check_thread () =
   if not (Domain.is_main_domain () && B.thread_ok ()) then
     invalid_arg
-      "Pyembed: Python may only be used from the thread that initialized it \
-       (and not in a forked child)"
+      "Sboa: Python may only be used from the thread that initialized it (and \
+       not in a forked child)"
 
 let with_gil ?(keep_domain_lock = false) f =
   if B.init_failed () then failwith (B.init_error ());
@@ -811,8 +808,8 @@ module Conv = struct
   let call_in_scope scope o args r =
     if not scope.live then
       invalid_arg
-        "Pyembed.Conv: Python callable used after the export call that \
-         received it returned";
+        "Sboa.Conv: Python callable used after the export call that received \
+         it returned";
     with_gil (fun gil ->
         result_of gil r (Object.call gil o ~args:(args gil) ()))
 
@@ -943,7 +940,7 @@ module Class = struct
       ~of_py:(unwrap c) ()
 end
 
-(* A counter is the address of the atomic inside a [_pyembed.Counter]
+(* A counter is the address of the atomic inside a [_sboa.Counter]
    instance plus an owned handle on that instance, so the Python object (and
    the address) stays valid as long as the OCaml value is reachable, even
    after the export call that received it returned and released its
@@ -1155,7 +1152,7 @@ let dispatch (idx : int) : Object.t option =
               set_python_error gil e bt;
               None))
 
-let () = Callback.register "pyembed.dispatch" dispatch
+let () = Callback.register "sboa.dispatch" dispatch
 
 module Debug = struct
   let pending_decrefs = B.pending_decrefs

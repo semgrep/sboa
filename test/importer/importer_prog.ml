@@ -16,7 +16,7 @@
    cleanly and Python stays refused afterwards. Exits non-zero on any
    mismatch. *)
 
-let stdlib = Sys.getenv "PYEMBED_STDLIB"
+let stdlib = Sys.getenv "SBOA_STDLIB"
 
 let fail fmt =
   Printf.ksprintf
@@ -27,28 +27,26 @@ let fail fmt =
 
 let check_ok () =
   let r =
-    Pyembed.with_gil (fun gil ->
-        Pyembed.exec gil
+    Sboa.with_gil (fun gil ->
+        Sboa.exec gil
           "import sys, demopkg, demopkg.mod\n\
            finder = [f for f in sys.meta_path if type(f).__name__ == \
-           'PyembedFinder']\n\
+           'SboaFinder']\n\
            result = '|'.join([demopkg.GREETING, demopkg.mod.where(), \
            str(len(finder))])\n";
-        Pyembed.Conv.of_py_exn Pyembed.Conv.string gil
-          (Pyembed.eval gil "result"))
+        Sboa.Conv.of_py_exn Sboa.Conv.string gil (Sboa.eval gil "result"))
   in
-  let expected = "hello from the bundle|<pyembed:demo>/demopkg/mod.py|1" in
+  let expected = "hello from the bundle|<sboa:demo>/demopkg/mod.py|1" in
   if String.equal r expected then print_endline ("importer: ok: " ^ r)
   else fail "expected %S, got %S" expected r
 
 let check_refused mode =
   match
-    Pyembed.init
-      { (Pyembed.Config.default ()) with extra_sys_path = [ stdlib ] }
+    Sboa.init { (Sboa.Config.default ()) with extra_sys_path = [ stdlib ] }
   with
   | () -> fail "%s bundle accepted" mode
   | exception Failure first -> (
-      match Pyembed.with_gil (fun _ -> ()) with
+      match Sboa.with_gil (fun _ -> ()) with
       | () -> fail "%s: Python usable after a failed init" mode
       | exception Failure again when String.equal first again ->
           let line =
@@ -62,10 +60,10 @@ let check_refused mode =
 (* The external-prefix fallback for C extension modules: the stdlib alone is
    on sys.path (not its lib-dynload), so an extension module can only come
    from the bundle importer's libdynload_dir, here
-   Pyembed_toolchain.libdynload_dir (). Only meaningful when the toolchain
-   is an external CPython (PYEMBED_PREFIX) with extension modules. *)
+   Sboa_toolchain.libdynload_dir (). Only meaningful when the toolchain
+   is an external CPython (SBOA_PREFIX) with extension modules. *)
 let check_dynload () =
-  match Pyembed_toolchain.external_libdynload_dir with
+  match Sboa_toolchain.external_libdynload_dir with
   | None ->
       print_endline
         "importer: dynload: skipped (the toolchain has no external lib-dynload)"
@@ -88,43 +86,50 @@ let check_dynload () =
             | Some i -> String.sub f 0 i
             | None -> f
           in
-          (match Pyembed_toolchain.libdynload_dir () with
+          (match Sboa_toolchain.libdynload_dir () with
           | Some d when String.equal d ext -> ()
           | _ -> fail "dynload: libdynload_dir () is not %s" ext);
-          Pyembed.init
+          Sboa.init
             {
-              (Pyembed.Config.default ()) with
+              (Sboa.Config.default ()) with
               extra_sys_path = [ stdlib ];
-              libdynload_dir = Pyembed_toolchain.libdynload_dir ();
+              libdynload_dir = Sboa_toolchain.libdynload_dir ();
             };
           let file =
-            Pyembed.with_gil (fun gil ->
-                Pyembed.exec gil
+            Sboa.with_gil (fun gil ->
+                Sboa.exec gil
                   (Printf.sprintf "import %s\nresult = %s.__file__\n" modname
                      modname);
-                Pyembed.Conv.of_py_exn Pyembed.Conv.string gil
-                  (Pyembed.eval gil "result"))
+                Sboa.Conv.of_py_exn Sboa.Conv.string gil
+                  (Sboa.eval gil "result"))
           in
           if String.starts_with ~prefix:ext file then
             Printf.printf "importer: dynload: ok: %s from %s\n" modname file
           else fail "dynload: %s loaded from %s, not %s" modname file ext)
 
 let () =
-  assert (String.equal (Pyembed.Bundle.name Demo_bundle.bundle) "demo");
-  let demo = Pyembed.Bundle.data Demo_bundle.bundle in
+  assert (String.equal (Sboa.Bundle.name Demo_bundle.bundle) "demo");
+  let demo = Sboa.Bundle.data Demo_bundle.bundle in
   match Sys.argv with
   | [| _; "empty" |] ->
-      Pyembed.Bundle.register
-        (Pyembed.Bundle.of_incbin ~symbol:"none" ~name:"empty"
+      Sboa.Bundle.register
+        (Sboa.Bundle.of_incbin ~symbol:"none" ~name:"empty"
            (Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0));
       check_refused "empty"
   | [| _; "truncated" |] ->
-      Pyembed.Bundle.register
-        (Pyembed.Bundle.of_incbin ~symbol:"demo_bundle" ~name:"truncated"
+      Sboa.Bundle.register
+        (Sboa.Bundle.of_incbin ~symbol:"demo_bundle" ~name:"truncated"
            (Bigarray.Array1.sub demo 0 (Bigarray.Array1.dim demo / 2)));
       check_refused "truncated"
   | [| _; "dynload" |] -> check_dynload ()
   | _ ->
-      Pyembed.init
-        { (Pyembed.Config.default ()) with extra_sys_path = [ stdlib ] };
+      (* The extension modules of a CPython that keeps them in lib-dynload
+         (zlib among them on nix) come through the importer, like in an
+         application. *)
+      Sboa.init
+        {
+          (Sboa.Config.default ()) with
+          extra_sys_path = [ stdlib ];
+          libdynload_dir = Sboa_toolchain.libdynload_dir ();
+        };
       check_ok ()

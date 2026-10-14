@@ -10,11 +10,11 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
 # LICENSE for more details.
 #
-"""Shared fixtures for the pyembed bundler/importer tests.
+"""Shared fixtures for the sboa bundler/importer tests.
 
 Every test that installs the importer does so in a fresh subprocess (``run_isolated``)
 running the same interpreter as pytest with ``-I -S`` and ``sys.path = []``, so the
-only way to import anything not already loaded is through ``_pyembed_importer``.
+only way to import anything not already loaded is through ``_sboa_importer``.
 """
 import json
 import os
@@ -29,12 +29,12 @@ from typing import Sequence
 
 import pytest
 
-PYEMBED_DIR = Path(__file__).resolve().parents[2]
-TOOL = PYEMBED_DIR / "tools" / "pyembed_bundle.py"
-IMPORTER = PYEMBED_DIR / "python" / "_pyembed_importer.py"
+SBOA_DIR = Path(__file__).resolve().parents[2]
+TOOL = SBOA_DIR / "tools" / "sboa_bundle.py"
+IMPORTER = SBOA_DIR / "python" / "_sboa_importer.py"
 STDLIB_DIR = Path(
     os.environ.get(
-        "PYEMBED_STDLIB_DIR",
+        "SBOA_STDLIB_DIR",
         Path(sys.base_prefix)
         / "lib"
         / f"python{sys.version_info[0]}.{sys.version_info[1]}",
@@ -42,9 +42,18 @@ STDLIB_DIR = Path(
 )
 LIBDYNLOAD_DIR = STDLIB_DIR / "lib-dynload"
 
+# Several tests run the bundled stdlib with no lib-dynload, which only works
+# when the interpreter compiles the stdlib extension modules into libpython
+# (python-build-standalone, e.g. uv's CPython); nix and Homebrew builds keep
+# them in lib-dynload.
+needs_builtin_extensions = pytest.mark.skipif(
+    "_csv" not in sys.builtin_module_names,
+    reason="needs a CPython with the stdlib extension modules built in",
+)
+
 
 def run_tool(*args: str, check: bool = True) -> "subprocess.CompletedProcess[str]":
-    """Run ``pyembed_bundle.py`` under the current interpreter."""
+    """Run ``sboa_bundle.py`` under the current interpreter."""
     r = subprocess.run(
         [sys.executable, "-I", str(TOOL), *args], capture_output=True, text=True
     )
@@ -58,10 +67,13 @@ import json, sys, time
 _t0 = time.perf_counter()
 # Load the importer the way the frozen table does: a code object executed in a
 # module that has no __file__.
-_pyembed_importer = type(sys)("_pyembed_importer")
+_sboa_importer = type(sys)("_sboa_importer")
 with open({importer!r}, "rb") as _f:
-    exec(compile(_f.read(), "<frozen _pyembed_importer>", "exec"), _pyembed_importer.__dict__)
-sys.modules["_pyembed_importer"] = _pyembed_importer
+    exec(compile(_f.read(), "<frozen _sboa_importer>", "exec"), _sboa_importer.__dict__)
+sys.modules["_sboa_importer"] = _sboa_importer
+# zlib is builtin in python-build-standalone but an extension module in nix
+# or Homebrew builds; load it now, as an embedding with libdynload_dir would.
+import zlib
 # From here on nothing comes from the filesystem except dev overrides and lib-dynload.
 sys.path[:] = []
 sys.path_importer_cache.clear()
@@ -69,7 +81,7 @@ _bundles = []
 for _name, _path in {bundles!r}:
     with open(_path, "rb") as _f:
         _bundles.append((_name, memoryview(_f.read())))
-FINDER = _pyembed_importer.install(_bundles, {libdynload!r}, {dev!r})
+FINDER = _sboa_importer.install(_bundles, {libdynload!r}, {dev!r})
 RESULT = {{}}
 """
 

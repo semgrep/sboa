@@ -1,0 +1,7 @@
+; The bundle tool, installed into lib/sboa/ (%{lib:sboa:sboa_bundle.py} in
+; applications' dune rules). Its tests (tests/) are run with pytest.
+
+(install
+ (section lib)
+ (package sboa)
+ (files sboa_bundle.py))

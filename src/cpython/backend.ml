@@ -10,8 +10,8 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(* pyembed.cpython implementation of the [Backend] primitives: every value is
-   a C stub in pyembed_{runtime,object,export}.c. See backend.mli for the
+(* sboa.cpython implementation of the [Backend] primitives: every value is
+   a C stub in sboa_{runtime,object,export}.c. See backend.mli for the
    contract. *)
 
 type obj
@@ -24,8 +24,8 @@ exception Overflow
 exception Not_available
 
 let () =
-  Callback.register_exception "pyembed.pending" Pending;
-  Callback.register_exception "pyembed.overflow" Overflow
+  Callback.register_exception "sboa.pending" Pending;
+  Callback.register_exception "sboa.overflow" Overflow
 
 type fn_spec = {
   fn_module : string;
@@ -80,91 +80,88 @@ type exc_class =
   | Exc_keyboard_interrupt
   | Exc_ocaml
 
-external init : init_args -> unit = "pyembed_init"
-external is_initialized : unit -> bool = "pyembed_is_initialized" [@@noalloc]
-external init_failed : unit -> bool = "pyembed_init_failed" [@@noalloc]
-external init_error : unit -> string = "pyembed_init_error"
-external thread_ok : unit -> bool = "pyembed_thread_ok" [@@noalloc]
-external gil_ensure : bool -> int = "pyembed_gil_ensure"
-external gil_release : int -> unit = "pyembed_gil_release"
-external save_thread : unit -> unit = "pyembed_save_thread"
-external restore_thread : unit -> unit = "pyembed_restore_thread"
-external drain : unit -> unit = "pyembed_drain"
-external pending_decrefs : unit -> int = "pyembed_pending_decrefs" [@@noalloc]
-external live_roots : unit -> int = "pyembed_live_roots" [@@noalloc]
-external gc_collect : unit -> int = "pyembed_gc_collect"
-external finish : unit -> bool = "pyembed_finish"
-external none_ : unit -> obj = "pyembed_none"
+external init : init_args -> unit = "sboa_init"
+external is_initialized : unit -> bool = "sboa_is_initialized" [@@noalloc]
+external init_failed : unit -> bool = "sboa_init_failed" [@@noalloc]
+external init_error : unit -> string = "sboa_init_error"
+external thread_ok : unit -> bool = "sboa_thread_ok" [@@noalloc]
+external gil_ensure : bool -> int = "sboa_gil_ensure"
+external gil_release : int -> unit = "sboa_gil_release"
+external save_thread : unit -> unit = "sboa_save_thread"
+external restore_thread : unit -> unit = "sboa_restore_thread"
+external drain : unit -> unit = "sboa_drain"
+external pending_decrefs : unit -> int = "sboa_pending_decrefs" [@@noalloc]
+external live_roots : unit -> int = "sboa_live_roots" [@@noalloc]
+external gc_collect : unit -> int = "sboa_gc_collect"
+external finish : unit -> bool = "sboa_finish"
+external none_ : unit -> obj = "sboa_none"
 
 let none = none_ ()
 
-external is_none : obj -> bool = "pyembed_is_none" [@@noalloc]
-external release : obj -> unit = "pyembed_release"
-external release_args : obj array -> obj -> unit = "pyembed_release_args"
-external refcount : obj -> int = "pyembed_refcount"
-external type_name : obj -> string = "pyembed_type_name"
-external is_callable : obj -> bool = "pyembed_is_callable"
-external import : string -> obj = "pyembed_import"
-external get_attr : obj -> string -> obj = "pyembed_get_attr"
-external set_attr : obj -> string -> obj -> unit = "pyembed_set_attr"
+external is_none : obj -> bool = "sboa_is_none" [@@noalloc]
+external release : obj -> unit = "sboa_release"
+external release_args : obj array -> obj -> unit = "sboa_release_args"
+external refcount : obj -> int = "sboa_refcount"
+external type_name : obj -> string = "sboa_type_name"
+external is_callable : obj -> bool = "sboa_is_callable"
+external import : string -> obj = "sboa_import"
+external get_attr : obj -> string -> obj = "sboa_get_attr"
+external set_attr : obj -> string -> obj -> unit = "sboa_set_attr"
 
 external call : obj -> obj array -> string array -> obj array -> obj
-  = "pyembed_call"
+  = "sboa_call"
 
-external repr : obj -> string = "pyembed_repr"
-external str : obj -> string = "pyembed_str"
-external eval : string -> obj = "pyembed_eval"
-external exec : string -> unit = "pyembed_exec"
-external kind : obj -> kind = "pyembed_kind"
-external of_int : int -> obj = "pyembed_of_int"
-external to_int : obj -> int = "pyembed_to_int"
-external of_float : float -> obj = "pyembed_of_float"
-external to_float : obj -> float = "pyembed_to_float"
-external of_bool : bool -> obj = "pyembed_of_bool"
-external to_bool : obj -> bool = "pyembed_to_bool"
-external of_string : string -> obj = "pyembed_of_string"
-external to_string : obj -> string = "pyembed_to_string"
-external of_bytes : string -> obj = "pyembed_of_bytes"
-external to_bytes : obj -> string = "pyembed_to_bytes"
-external list_of_array : obj array -> obj = "pyembed_list_of_array"
-external tuple_of_array : obj array -> obj = "pyembed_tuple_of_array"
-external seq_items : obj -> obj array = "pyembed_seq_items"
+external repr : obj -> string = "sboa_repr"
+external str : obj -> string = "sboa_str"
+external eval : string -> obj = "sboa_eval"
+external exec : string -> unit = "sboa_exec"
+external kind : obj -> kind = "sboa_kind"
+external of_int : int -> obj = "sboa_of_int"
+external to_int : obj -> int = "sboa_to_int"
+external of_float : float -> obj = "sboa_of_float"
+external to_float : obj -> float = "sboa_to_float"
+external of_bool : bool -> obj = "sboa_of_bool"
+external to_bool : obj -> bool = "sboa_to_bool"
+external of_string : string -> obj = "sboa_of_string"
+external to_string : obj -> string = "sboa_to_string"
+external of_bytes : string -> obj = "sboa_of_bytes"
+external to_bytes : obj -> string = "sboa_to_bytes"
+external list_of_array : obj array -> obj = "sboa_list_of_array"
+external tuple_of_array : obj array -> obj = "sboa_tuple_of_array"
+external seq_items : obj -> obj array = "sboa_seq_items"
 
 external dict_of_arrays : string array -> obj array -> obj
-  = "pyembed_dict_of_arrays"
+  = "sboa_dict_of_arrays"
 
-external dict_items : obj -> (obj * obj) array = "pyembed_dict_items"
-external take_pending : unit -> obj = "pyembed_take_pending"
-external exc_classify : obj -> exc_class = "pyembed_exc_classify"
-external exc_info : obj -> string * string * string = "pyembed_exc_info"
-external exit_code : obj -> int = "pyembed_exit_code"
-external resurrect : obj -> exn * Printexc.raw_backtrace = "pyembed_resurrect"
-external set_error_obj : obj -> unit = "pyembed_set_error_obj"
-
-external set_error_builtin : string -> string -> unit
-  = "pyembed_set_error_builtin"
-
-external set_error_class : obj -> obj -> unit = "pyembed_set_error_class"
-external set_error_system_exit : int -> unit = "pyembed_set_error_system_exit"
+external dict_items : obj -> (obj * obj) array = "sboa_dict_items"
+external take_pending : unit -> obj = "sboa_take_pending"
+external exc_classify : obj -> exc_class = "sboa_exc_classify"
+external exc_info : obj -> string * string * string = "sboa_exc_info"
+external exit_code : obj -> int = "sboa_exit_code"
+external resurrect : obj -> exn * Printexc.raw_backtrace = "sboa_resurrect"
+external set_error_obj : obj -> unit = "sboa_set_error_obj"
+external set_error_builtin : string -> string -> unit = "sboa_set_error_builtin"
+external set_error_class : obj -> obj -> unit = "sboa_set_error_class"
+external set_error_system_exit : int -> unit = "sboa_set_error_system_exit"
 
 external set_error_ocaml : string -> exn * Printexc.raw_backtrace -> unit
-  = "pyembed_set_error_ocaml"
+  = "sboa_set_error_ocaml"
 
-external frame_args : unit -> obj array = "pyembed_frame_args"
-external frame_kwnames : unit -> string array = "pyembed_frame_kwnames"
-external class_wrap : int -> Obj.t -> obj = "pyembed_class_wrap"
-external class_unwrap : int -> obj -> Obj.t option = "pyembed_class_unwrap"
-external counter_ptr : obj -> nativeint = "pyembed_counter_ptr"
-external new_ref : obj -> obj = "pyembed_new_ref"
+external frame_args : unit -> obj array = "sboa_frame_args"
+external frame_kwnames : unit -> string array = "sboa_frame_kwnames"
+external class_wrap : int -> Obj.t -> obj = "sboa_class_wrap"
+external class_unwrap : int -> obj -> Obj.t option = "sboa_class_unwrap"
+external counter_ptr : obj -> nativeint = "sboa_counter_ptr"
+external new_ref : obj -> obj = "sboa_new_ref"
 
 external counter_add : (nativeint[@unboxed]) -> (int[@untagged]) -> unit
-  = "pyembed_counter_add" "pyembed_counter_add_native"
+  = "sboa_counter_add" "sboa_counter_add_native"
 [@@noalloc]
 
 external counter_set : (nativeint[@unboxed]) -> (int[@untagged]) -> unit
-  = "pyembed_counter_set" "pyembed_counter_set_native"
+  = "sboa_counter_set" "sboa_counter_set_native"
 [@@noalloc]
 
 external counter_get : (nativeint[@unboxed]) -> (int[@untagged])
-  = "pyembed_counter_get" "pyembed_counter_get_native"
+  = "sboa_counter_get" "sboa_counter_get_native"
 [@@noalloc]

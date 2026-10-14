@@ -13,7 +13,7 @@
 (* Forces frozen_anchor.o (and the frozen table it includes) into the link;
    see frozen_anchor.c and the dune file. *)
 
-external anchor : unit -> unit = "pyembed_frozen_anchor"
+external anchor : unit -> unit = "sboa_frozen_anchor"
 
 let linked =
   anchor ();

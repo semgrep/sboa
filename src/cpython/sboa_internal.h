@@ -10,17 +10,17 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 */
-/* pyembed: state and helpers shared by the C stubs of pyembed.cpython.
+/* sboa: state and helpers shared by the C stubs of sboa.cpython.
 
    Thread model (v1, see BRIDGE_DESIGN.md section 3): Python runs only on the
-   systhread that called pyembed_init (the "main" thread, domain 0). That
+   systhread that called sboa_init (the "main" thread, domain 0). That
    thread alternates between three states:
      - OCaml:   holds the OCaml domain lock, not the GIL (outside with_gil);
      - bridge:  holds both (OCaml code inside with_gil, stubs converting data);
      - Python:  holds the GIL and has released the domain lock
-                (pyembed_runtime_released = 1) so other OCaml systhreads run.
+                (sboa_runtime_released = 1) so other OCaml systhreads run.
    The globals below describe the main thread only; every other thread is
-   refused before it can touch them (pyembed_thread_ok / the trampoline
+   refused before it can touch them (sboa_thread_ok / the trampoline
    check). Lock order: no thread other than the main thread ever holds both
    locks, so blocking on one while holding the other cannot deadlock in v1.
 
@@ -29,8 +29,8 @@
    import.html, type.html, refcounting.html); OCaml manual chapter 22
    "Interfacing C with OCaml" (sections 22.5 callbacks, 22.9 custom blocks,
    22.12 parallel execution / threads). */
-#ifndef PYEMBED_INTERNAL_H
-#define PYEMBED_INTERNAL_H
+#ifndef SBOA_INTERNAL_H
+#define SBOA_INTERNAL_H
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -50,72 +50,72 @@
 #include <signal.h>
 #include <stdatomic.h>
 
-/* ---- main-thread state (pyembed_runtime.c) ---- */
+/* ---- main-thread state (sboa_runtime.c) ---- */
 
-extern int pyembed_initialized;
-extern unsigned long pyembed_main_ident;
+extern int sboa_initialized;
+extern unsigned long sboa_main_ident;
 /* The main thread released the OCaml domain lock around Python code. */
-extern int pyembed_runtime_released;
+extern int sboa_runtime_released;
 /* with_gil ~keep_domain_lock:true is in effect. */
-extern int pyembed_keep_lock;
+extern int sboa_keep_lock;
 /* Python owns the main thread: SIGINT/SIGTERM go to PyErr_SetInterruptEx. */
-extern volatile sig_atomic_t pyembed_in_python;
+extern volatile sig_atomic_t sboa_in_python;
 
 /* Process is a fork child of the initializing process (pthread_atfork). */
-extern volatile int pyembed_forked_child;
+extern volatile int sboa_forked_child;
 
 /* Raise Invalid_argument unless the calling thread holds the GIL, i.e. the
    gil token it presents is live (it may not escape its with_gil scope, be
    used inside detach, or be used from another thread). */
-void pyembed_check_gil(void);
+void sboa_check_gil(void);
 
 /* A section of Python execution from an OCaml stub: release the domain lock
    (unless keep mode), mark Python as the signal owner. Must be entered with
    the GIL and the domain lock held; no OCaml value may be touched until
-   pyembed_py_leave. */
+   sboa_py_leave. */
 typedef struct {
   int released;
   sig_atomic_t prev_in_python;
-} pyembed_py_section;
+} sboa_py_section;
 
-pyembed_py_section pyembed_py_enter(void);
-void pyembed_py_leave(pyembed_py_section s);
+sboa_py_section sboa_py_enter(void);
+void sboa_py_leave(sboa_py_section s);
 
-/* ---- deferred queues (pyembed_runtime.c) ---- */
+/* ---- deferred queues (sboa_runtime.c) ---- */
 
 /* Queue a DECREF; safe from any thread, any lock state (finalizers). */
-void pyembed_defer_decref(PyObject *o);
+void sboa_defer_decref(PyObject *o);
 /* DECREF everything queued. GIL held; runtime lock state unchanged. */
-void pyembed_drain_decrefs(void);
+void sboa_drain_decrefs(void);
 /* A generational global root owned by Python (class instance, capsule). */
-value *pyembed_new_root(value v);
+value *sboa_new_root(value v);
 /* Remove now if the main thread holds the domain lock, else queue. */
-void pyembed_release_root(value *root);
+void sboa_release_root(value *root);
 /* Remove queued roots. Domain lock held. */
-void pyembed_drain_roots(void);
+void sboa_drain_roots(void);
 
-/* ---- objects (pyembed_object.c) ---- */
+/* ---- objects (sboa_object.c) ---- */
 
 /* Allocate an Object.t custom block owning [o] (steals the reference). */
-value pyembed_wrap(PyObject *o);
+value sboa_wrap(PyObject *o);
 /* The PyObject* of an Object.t; raises Invalid_argument after release. */
-PyObject *pyembed_obj(value v);
+PyObject *sboa_obj(value v);
 /* The PyObject* of an Object.t without the GIL check (finalizers, C-only
    paths that already checked). */
-#define PYEMBED_OBJ_PTR(v) (*((PyObject **)Data_custom_val(v)))
+#define SBOA_OBJ_PTR(v) (*((PyObject **)Data_custom_val(v)))
 /* Move the raised Python exception to the pending slot, raise Pending.
    Domain lock held; the GIL state is owned by an enclosing with_gil. */
-CAMLnoreturn_start void pyembed_raise_pending(void) CAMLnoreturn_end;
+CAMLnoreturn_start void sboa_raise_pending(void) CAMLnoreturn_end;
 
-/* ---- exports (pyembed_export.c) ---- */
+/* ---- exports (sboa_export.c) ---- */
 
-extern PyObject *pyembed_ocaml_error_type; /* _pyembed.OCamlError */
-#define PYEMBED_EXN_CAPSULE "pyembed.ocaml_exn"
+extern PyObject *sboa_ocaml_error_type; /* _sboa.OCamlError */
+#define SBOA_EXN_CAPSULE "sboa.ocaml_exn"
 
 /* Copy the export registry and register inittab entries. Before init. */
-void pyembed_exports_setup(value functions, value classes, value methods);
-/* Copy bundles / importer settings for the _pyembed module. Before init. */
-void pyembed_module_setup(value bundles, value libdynload_dir,
+void sboa_exports_setup(value functions, value classes, value methods);
+/* Copy bundles / importer settings for the _sboa module. Before init. */
+void sboa_module_setup(value bundles, value libdynload_dir,
                           value dev_overrides);
 
 #endif

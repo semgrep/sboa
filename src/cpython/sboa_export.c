@@ -10,7 +10,7 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 */
-/* pyembed exports: the `_pyembed` builtin module, the builtin modules built
+/* sboa exports: the `_sboa` builtin module, the builtin modules built
    from the OCaml Export registry, the single Python -> OCaml trampoline, and
    the heap-type factory for exported OCaml classes.
 
@@ -27,7 +27,7 @@
 
    Trampoline: PyEval_SaveThread -> acquire the OCaml domain lock (if the
    Python call that led here had released it) -> OCaml dispatcher ->
-   release -> PyEval_RestoreThread. The dispatcher (Pyembed.dispatch,
+   release -> PyEval_RestoreThread. The dispatcher (Sboa.dispatch,
    registered with Callback.register) re-takes the GIL with with_gil for
    argument and result conversion and translates OCaml exceptions into a
    Python error indicator; it is called with caml_callback_res so an OCaml
@@ -41,22 +41,22 @@
    `self` arrives as the first positional argument. tp_dealloc releases the
    generational root holding the OCaml value.
 
-   Counter: _pyembed.Counter, a final heap type whose instances hold one
+   Counter: _sboa.Counter, a final heap type whose instances hold one
    64-bit C11 atomic. Python reads it through the `value` getter (C only,
    so any Python thread may read it without entering OCaml); OCaml updates
    it from any domain through the [@@noalloc] stubs below, which take the
    address of the atomic and never touch Python or the OCaml runtime. Every
    export module re-exports the type as <module>.Counter. */
-#include "pyembed_internal.h"
+#include "sboa_internal.h"
 
 #include <string.h>
 #include <sys/stat.h>
 
 #define MAX_MODULES 32
-#define FN_CAPSULE "pyembed.fn"
+#define FN_CAPSULE "sboa.fn"
 
-PyObject *pyembed_ocaml_error_type = NULL;
-static PyObject *counter_type = NULL; /* _pyembed.Counter */
+PyObject *sboa_ocaml_error_type = NULL;
+static PyObject *counter_type = NULL; /* _sboa.Counter */
 
 /* ------------------------------------------------------------------------ */
 /* Registry copied from OCaml at init                                         */
@@ -100,7 +100,7 @@ static char *dup_ml(value s) { return caml_stat_strdup(String_val(s)); }
 static int module_index(const char *name) {
   for (int i = 0; i < n_modules; i++)
     if (strcmp(modules[i], name) == 0) return i;
-  if (n_modules == MAX_MODULES) caml_failwith("pyembed: too many exported modules");
+  if (n_modules == MAX_MODULES) caml_failwith("sboa: too many exported modules");
   modules[n_modules] = caml_stat_strdup(name);
   return n_modules++;
 }
@@ -154,7 +154,7 @@ typedef struct {
 static void instance_dealloc(PyObject *self) {
   instance *o = (instance *)self;
   PyTypeObject *tp = Py_TYPE(self);
-  if (o->root != NULL) pyembed_release_root(o->root);
+  if (o->root != NULL) sboa_release_root(o->root);
   tp->tp_free(self);
   Py_DECREF(tp);
 }
@@ -242,7 +242,7 @@ static PyObject *make_module(int k) {
       goto fail;
   }
   if (!PyObject_HasAttrString(m, "OCamlError") &&
-      PyModule_AddObjectRef(m, "OCamlError", pyembed_ocaml_error_type) != 0)
+      PyModule_AddObjectRef(m, "OCamlError", sboa_ocaml_error_type) != 0)
     goto fail;
   if (counter_type != NULL && !PyObject_HasAttrString(m, "Counter") &&
       PyModule_AddObjectRef(m, "Counter", counter_type) != 0)
@@ -255,7 +255,7 @@ fail:
   return NULL;
 }
 
-void pyembed_exports_setup(value v_functions, value v_classes, value v_methods) {
+void sboa_exports_setup(value v_functions, value v_classes, value v_methods) {
   n_functions = Wosize_val(v_functions);
   n_classes = Wosize_val(v_classes);
   n_methods = Wosize_val(v_methods);
@@ -298,21 +298,21 @@ void pyembed_exports_setup(value v_functions, value v_classes, value v_methods) 
   }
   for (int k = 0; k < n_modules; k++)
     if (PyImport_AppendInittab(modules[k], init_pool[k]) != 0)
-      caml_failwith("pyembed: PyImport_AppendInittab failed");
+      caml_failwith("sboa: PyImport_AppendInittab failed");
 }
 
 /* ------------------------------------------------------------------------ */
 /* Trampoline                                                                */
 
 static int check_main_thread(void) {
-  if (pyembed_forked_child) {
+  if (sboa_forked_child) {
     PyErr_SetString(PyExc_RuntimeError,
-                    "pyembed: Python cannot call OCaml in a forked child");
+                    "sboa: Python cannot call OCaml in a forked child");
     return 0;
   }
-  if (PyThread_get_thread_ident() != pyembed_main_ident) {
+  if (PyThread_get_thread_ident() != sboa_main_ident) {
     PyErr_SetString(PyExc_RuntimeError,
-                    "pyembed: OCaml functions may only be called from the "
+                    "sboa: OCaml functions may only be called from the "
                     "thread that initialized Python");
     return 0;
   }
@@ -337,7 +337,7 @@ static PyObject *run_dispatcher(int fn, char **err) {
   CAMLlocal1(r);
   static const value *dispatch = NULL;
   PyObject *ret = NULL;
-  if (dispatch == NULL) dispatch = caml_named_value("pyembed.dispatch");
+  if (dispatch == NULL) dispatch = caml_named_value("sboa.dispatch");
   caml_result res = caml_callback_res(*dispatch, Val_int(fn));
   if (caml_result_is_exception(res)) {
     *err = caml_format_exception(res.data);
@@ -364,28 +364,28 @@ static PyObject *call_ocaml(int fn, PyObject *const *args, Py_ssize_t nargs,
   /* (The deferred DECREF queue is drained by the dispatcher's with_gil.) */
   struct frame fr = {args, nargs, kwnames, current_frame};
   current_frame = &fr;
-  sig_atomic_t prev_in_python = pyembed_in_python;
-  int was_released = pyembed_runtime_released;
+  sig_atomic_t prev_in_python = sboa_in_python;
+  int was_released = sboa_runtime_released;
   char *err = NULL;
 
   PyThreadState *ts = PyEval_SaveThread();
   if (was_released) {
     caml_leave_blocking_section();
-    pyembed_runtime_released = 0;
+    sboa_runtime_released = 0;
   }
   /* Only now, holding the domain lock, does OCaml own the signals: one
      arriving while this thread waited for the lock went to Python and is
      handed back to OCaml on this thread by the dispatcher's with_gil
      (gil_ensure -> hand_late_signal_to_ocaml). */
-  pyembed_in_python = 0;
-  pyembed_drain_roots();
+  sboa_in_python = 0;
+  sboa_drain_roots();
   /* The result object stays alive until the INCREF below: its Object.t can
      at worst be finalized, which only queues a DECREF, and the queue is
      drained by this thread at a later bridge entry. */
   PyObject *ret = run_dispatcher(fn, &err);
-  pyembed_in_python = prev_in_python;
+  sboa_in_python = prev_in_python;
   if (was_released) {
-    pyembed_runtime_released = 1;
+    sboa_runtime_released = 1;
     caml_enter_blocking_section_no_pending();
   }
   PyEval_RestoreThread(ts);
@@ -395,11 +395,11 @@ static PyObject *call_ocaml(int fn, PyObject *const *args, Py_ssize_t nargs,
   if (ret != NULL) return Py_NewRef(ret);
   if (err != NULL) {
     if (!PyErr_Occurred())
-      PyErr_Format(PyExc_SystemError, "pyembed: OCaml dispatcher raised %s", err);
+      PyErr_Format(PyExc_SystemError, "sboa: OCaml dispatcher raised %s", err);
     caml_stat_free(err);
   } else if (!PyErr_Occurred()) {
     PyErr_SetString(PyExc_SystemError,
-                    "pyembed: OCaml export failed without an exception");
+                    "sboa: OCaml export failed without an exception");
   }
   return NULL;
 }
@@ -412,34 +412,34 @@ static PyObject *trampoline(PyObject *self, PyObject *const *args,
   return call_ocaml((int)((intptr_t)p - 1), args, nargs, kwnames);
 }
 
-value pyembed_frame_args(value unit) {
+value sboa_frame_args(value unit) {
   CAMLparam0();
   CAMLlocal2(arr, x);
-  pyembed_check_gil();
+  sboa_check_gil();
   struct frame *f = current_frame;
-  if (f == NULL) caml_failwith("pyembed: no export call in progress");
+  if (f == NULL) caml_failwith("sboa: no export call in progress");
   Py_ssize_t nk = f->kwnames ? PyTuple_GET_SIZE(f->kwnames) : 0;
   Py_ssize_t n = f->nargs + nk;
   arr = caml_alloc(n, 0);
   for (Py_ssize_t i = 0; i < n; i++) {
-    x = pyembed_wrap(Py_NewRef(f->args[i]));
+    x = sboa_wrap(Py_NewRef(f->args[i]));
     Store_field(arr, i, x);
   }
   CAMLreturn(arr);
 }
 
-value pyembed_frame_kwnames(value unit) {
+value sboa_frame_kwnames(value unit) {
   CAMLparam0();
   CAMLlocal2(arr, s);
-  pyembed_check_gil();
+  sboa_check_gil();
   struct frame *f = current_frame;
-  if (f == NULL) caml_failwith("pyembed: no export call in progress");
+  if (f == NULL) caml_failwith("sboa: no export call in progress");
   Py_ssize_t nk = f->kwnames ? PyTuple_GET_SIZE(f->kwnames) : 0;
   arr = caml_alloc(nk, 0);
   for (Py_ssize_t i = 0; i < nk; i++) {
     Py_ssize_t len;
     const char *p = PyUnicode_AsUTF8AndSize(PyTuple_GET_ITEM(f->kwnames, i), &len);
-    if (p == NULL) pyembed_raise_pending();
+    if (p == NULL) sboa_raise_pending();
     s = caml_alloc_initialized_string(len, p);
     Store_field(arr, i, s);
   }
@@ -452,26 +452,26 @@ value pyembed_frame_kwnames(value unit) {
 static PyTypeObject *class_type(value v_cls) {
   int c = Int_val(v_cls);
   if (c < 0 || c >= n_classes || classes[c].type == NULL)
-    caml_invalid_argument("Pyembed.Class: class not created yet (import its module first)");
+    caml_invalid_argument("Sboa.Class: class not created yet (import its module first)");
   return classes[c].type;
 }
 
-value pyembed_class_wrap(value v_cls, value v) {
+value sboa_class_wrap(value v_cls, value v) {
   CAMLparam2(v_cls, v);
-  pyembed_check_gil();
+  sboa_check_gil();
   PyTypeObject *t = class_type(v_cls);
   instance *o = PyObject_New(instance, t); /* INCREFs the heap type */
-  if (o == NULL) pyembed_raise_pending();
+  if (o == NULL) sboa_raise_pending();
   o->root = NULL;
   o->cls = Int_val(v_cls);
-  o->root = pyembed_new_root(v);
-  CAMLreturn(pyembed_wrap((PyObject *)o));
+  o->root = sboa_new_root(v);
+  CAMLreturn(sboa_wrap((PyObject *)o));
 }
 
-value pyembed_class_unwrap(value v_cls, value v_o) {
+value sboa_class_unwrap(value v_cls, value v_o) {
   CAMLparam2(v_cls, v_o);
   int c = Int_val(v_cls);
-  PyObject *o = pyembed_obj(v_o);
+  PyObject *o = sboa_obj(v_o);
   if (c < 0 || c >= n_classes || classes[c].type == NULL ||
       Py_TYPE(o) != classes[c].type || ((instance *)o)->root == NULL)
     CAMLreturn(Val_none);
@@ -479,7 +479,7 @@ value pyembed_class_unwrap(value v_cls, value v_o) {
 }
 
 /* ------------------------------------------------------------------------ */
-/* _pyembed.Counter                                                          */
+/* _sboa.Counter                                                          */
 
 typedef struct {
   PyObject_HEAD
@@ -524,7 +524,7 @@ static PyObject *make_counter_type(void) {
        "code updates from any domain while Python threads read `value`."},
       {0, NULL}};
   PyType_Spec spec = {
-      .name = "_pyembed.Counter",
+      .name = "_sboa.Counter",
       .basicsize = sizeof(counter),
       .itemsize = 0,
       .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE,
@@ -535,8 +535,8 @@ static PyObject *make_counter_type(void) {
 
 /* Address of the atomic of a Counter instance (as a nativeint), or 0 if [v]
    is not exactly a Counter. GIL held. */
-value pyembed_counter_ptr(value v) {
-  PyObject *o = pyembed_obj(v);
+value sboa_counter_ptr(value v) {
+  PyObject *o = sboa_obj(v);
   if (counter_type == NULL || Py_TYPE(o) != (PyTypeObject *)counter_type)
     return caml_copy_nativeint(0);
   return caml_copy_nativeint((intnat) & ((counter *)o)->count);
@@ -544,37 +544,37 @@ value pyembed_counter_ptr(value v) {
 
 /* A new owned handle on the same object (keeps a Counter alive while OCaml
    holds the address of its atomic). GIL held. */
-value pyembed_new_ref(value v) { return pyembed_wrap(Py_NewRef(pyembed_obj(v))); }
+value sboa_new_ref(value v) { return sboa_wrap(Py_NewRef(sboa_obj(v))); }
 
 /* The [@@noalloc] counter primitives: any thread, any domain, no lock. */
-value pyembed_counter_add_native(intnat p, intnat n) {
+value sboa_counter_add_native(intnat p, intnat n) {
   atomic_fetch_add_explicit((_Atomic long long *)p, (long long)n,
                             memory_order_relaxed);
   return Val_unit;
 }
-value pyembed_counter_add(value p, value n) {
-  return pyembed_counter_add_native(Nativeint_val(p), Long_val(n));
+value sboa_counter_add(value p, value n) {
+  return sboa_counter_add_native(Nativeint_val(p), Long_val(n));
 }
-value pyembed_counter_set_native(intnat p, intnat n) {
+value sboa_counter_set_native(intnat p, intnat n) {
   atomic_store_explicit((_Atomic long long *)p, (long long)n,
                         memory_order_relaxed);
   return Val_unit;
 }
-value pyembed_counter_set(value p, value n) {
-  return pyembed_counter_set_native(Nativeint_val(p), Long_val(n));
+value sboa_counter_set(value p, value n) {
+  return sboa_counter_set_native(Nativeint_val(p), Long_val(n));
 }
-intnat pyembed_counter_get_native(intnat p) {
+intnat sboa_counter_get_native(intnat p) {
   return (intnat)atomic_load_explicit((_Atomic long long *)p,
                                       memory_order_relaxed);
 }
-value pyembed_counter_get(value p) {
-  return Val_long(pyembed_counter_get_native(Nativeint_val(p)));
+value sboa_counter_get(value p) {
+  return Val_long(sboa_counter_get_native(Nativeint_val(p)));
 }
 
 /* ------------------------------------------------------------------------ */
-/* The _pyembed builtin module                                               */
+/* The _sboa builtin module                                               */
 
-static PyObject *init_pyembed_module(void);
+static PyObject *init_sboa_module(void);
 
 struct bundle {
   char *name;
@@ -587,7 +587,7 @@ static char *libdynload_dir = NULL;
 static char **dev_overrides = NULL;
 static int n_dev_overrides = 0;
 
-void pyembed_module_setup(value v_bundles, value v_dynload, value v_dev) {
+void sboa_module_setup(value v_bundles, value v_dynload, value v_dev) {
   n_bundles = Wosize_val(v_bundles);
   bundles = calloc(n_bundles + 1, sizeof *bundles);
   if (bundles == NULL) caml_raise_out_of_memory();
@@ -605,11 +605,11 @@ void pyembed_module_setup(value v_bundles, value v_dynload, value v_dev) {
   if (dev_overrides == NULL) caml_raise_out_of_memory();
   for (int i = 0; i < n_dev_overrides; i++)
     dev_overrides[i] = dup_ml(Field(v_dev, i));
-  if (PyImport_AppendInittab("_pyembed", init_pyembed_module) != 0)
-    caml_failwith("pyembed: PyImport_AppendInittab(_pyembed) failed");
+  if (PyImport_AppendInittab("_sboa", init_sboa_module) != 0)
+    caml_failwith("sboa: PyImport_AppendInittab(_sboa) failed");
 }
 
-/* _pyembed.bundles() -> list[tuple[str, memoryview]] in search order. */
+/* _sboa.bundles() -> list[tuple[str, memoryview]] in search order. */
 static PyObject *py_bundles(PyObject *self, PyObject *unused) {
   PyObject *l = PyList_New(n_bundles);
   for (int i = 0; l != NULL && i < n_bundles; i++) {
@@ -625,7 +625,7 @@ static PyObject *py_bundles(PyObject *self, PyObject *unused) {
   return l;
 }
 
-/* _pyembed.libdynload_dir(): the configured directory, or by default the
+/* _sboa.libdynload_dir(): the configured directory, or by default the
    layout the runtime files are installed in next to the executable:
    <dirname(sys.executable)>/libs/pythonX.Y/lib-dynload on unix, and the
    executable's own directory on Windows (python3XY.dll and the *.pyd
@@ -681,7 +681,7 @@ static PyObject *py_dev_overrides(PyObject *self, PyObject *unused) {
   return l;
 }
 
-static PyMethodDef pyembed_module_methods[] = {
+static PyMethodDef sboa_module_methods[] = {
     {"bundles", py_bundles, METH_NOARGS,
      "bundles($module, /)\n--\n\nEmbedded bundles as (name, memoryview) pairs, "
      "in search order."},
@@ -693,26 +693,26 @@ static PyMethodDef pyembed_module_methods[] = {
      "precedence over the bundles (development)."},
     {NULL, NULL, 0, NULL}};
 
-static struct PyModuleDef pyembed_module_def = {
-    PyModuleDef_HEAD_INIT, "_pyembed",
-    "Host services of the pyembed bridge.", -1, pyembed_module_methods,
+static struct PyModuleDef sboa_module_def = {
+    PyModuleDef_HEAD_INIT, "_sboa",
+    "Host services of the sboa bridge.", -1, sboa_module_methods,
     NULL, NULL, NULL, NULL};
 
-static PyObject *init_pyembed_module(void) {
-  PyObject *m = PyModule_Create(&pyembed_module_def);
+static PyObject *init_sboa_module(void) {
+  PyObject *m = PyModule_Create(&sboa_module_def);
   if (m == NULL) return NULL;
-  if (pyembed_ocaml_error_type == NULL) {
-    pyembed_ocaml_error_type = PyErr_NewExceptionWithDoc(
-        "_pyembed.OCamlError",
+  if (sboa_ocaml_error_type == NULL) {
+    sboa_ocaml_error_type = PyErr_NewExceptionWithDoc(
+        "_sboa.OCamlError",
         "An OCaml exception that crossed into Python. If it propagates back "
         "into OCaml, the original OCaml exception is re-raised.",
         PyExc_Exception, NULL);
-    if (pyembed_ocaml_error_type == NULL) {
+    if (sboa_ocaml_error_type == NULL) {
       Py_DECREF(m);
       return NULL;
     }
   }
-  if (PyModule_AddObjectRef(m, "OCamlError", pyembed_ocaml_error_type) != 0) {
+  if (PyModule_AddObjectRef(m, "OCamlError", sboa_ocaml_error_type) != 0) {
     Py_DECREF(m);
     return NULL;
   }

@@ -12,7 +12,7 @@
 *)
 (** Embed CPython in an OCaml program.
 
-    [pyembed] links one pinned CPython shared library into the executable and
+    [sboa] links a CPython 3.13 shared library into the executable and
     exposes a small, explicit bridge:
 
     - a {!gil} token proving the calling thread holds the GIL, obtained only
@@ -25,7 +25,7 @@
     - {!Counter}, 64-bit atomic counters that OCaml updates from any domain
       while Python threads read them (progress reporting);
     - exception translation in both directions ({!Python_error},
-      {!System_exit}, and [_pyembed.OCamlError], which resurrects the
+      {!System_exit}, and [_sboa.OCamlError], which resurrects the
       original OCaml exception when it crosses back).
 
     {b Thread rules (v1).} Python is initialized and used only from the
@@ -58,7 +58,7 @@
 
     This library knows nothing about any particular application. The
     implementation must be chosen explicitly by every executable that links
-    [pyembed] (there is no default): [pyembed.cpython] or [pyembed.disabled],
+    [sboa] (there is no default): [sboa.cpython] or [sboa.disabled],
     where {!init} and {!with_gil} raise {!Not_available}. *)
 
 type gil
@@ -311,7 +311,7 @@ exception System_exit of int
 (** [SystemExit] reached OCaml; the payload is the exit status. *)
 
 exception Not_available
-(** Raised by the [pyembed.disabled] implementation. *)
+(** Raised by the [sboa.disabled] implementation. *)
 
 (** OCaml values exposed to Python as instances of an exported class. *)
 module Class : sig
@@ -333,7 +333,7 @@ module Class : sig
   (** The class name (without the module). *)
 end
 
-(** Atomic counters shared with Python: [_pyembed.Counter] (re-exported by
+(** Atomic counters shared with Python: [_sboa.Counter] (re-exported by
     every export module as [<module>.Counter], unless the module registers
     a class of that name itself).
 
@@ -352,7 +352,7 @@ module Counter : sig
       Immutable; safe to share between domains. *)
 
   val of_py : t Conv.of_py
-  (** Of exactly a [_pyembed.Counter] instance (no subclass exists: the type
+  (** Of exactly a [_sboa.Counter] instance (no subclass exists: the type
       is final). *)
 
   val of_object : gil -> Object.t -> t
@@ -422,7 +422,7 @@ module Export : sig
       {!System_exit}, {!Conversion_error} -> [TypeError], [Sys.Break] ->
       [KeyboardInterrupt]) and before the fallbacks ([Out_of_memory] ->
       [MemoryError], [Stack_overflow] -> [RecursionError], anything else ->
-      [_pyembed.OCamlError], also reachable as [<module>.OCamlError]). A
+      [_sboa.OCamlError], also reachable as [<module>.OCamlError]). A
       mapping that raises is skipped, except that [Sys.Break] raised by a
       mapping becomes [KeyboardInterrupt]. *)
 end
@@ -459,13 +459,13 @@ module Bundle : sig
   (** The linker symbol given to {!of_incbin}. *)
 
   val name : t -> string
-  (** The bundle name, as seen by the importer ([<pyembed:name>/...]). *)
+  (** The bundle name, as seen by the importer ([<sboa:name>/...]). *)
 
   val data : t -> data
   (** The bytes. *)
 
   val register : ?priority:int -> t -> unit
-  (** Make the bundle visible to Python as [_pyembed.bundles()], which the
+  (** Make the bundle visible to Python as [_sboa.bundles()], which the
       bundle importer searches in order: lower priority first, ties in
       registration order (default 50). On the main domain, before {!init}. *)
 
@@ -474,7 +474,7 @@ module Bundle : sig
 end
 
 val init : Config.t -> unit
-(** Start the interpreter: register the {!Export} modules and [_pyembed] as
+(** Start the interpreter: register the {!Export} modules and [_sboa] as
     builtin modules, apply an isolated [PyConfig] ([sys.path] =
     [extra_sys_path], no [site], no bytecode writing, no Python signal
     handlers) in UTF-8 mode (PEP 540: the filesystem, stdio and preferred

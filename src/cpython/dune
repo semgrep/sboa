@@ -1,18 +1,18 @@
-; pyembed.cpython: the real implementation of the pyembed virtual library,
+; sboa.cpython: the real implementation of the sboa virtual library,
 ; linked against the CPython shared library located by probe.sh.
 
 (library
- (name pyembed_cpython)
- (public_name pyembed.cpython)
- (implements pyembed)
+ (name sboa_cpython)
+ (public_name sboa.cpython)
+ (implements sboa)
  ; threads.posix: the stubs use the systhreads master lock
  ; (caml_enter/leave_blocking_section with several systhreads) and
- ; pthread_atfork; unix: Unix._exit in Pyembed.exit lives in the virtual
+ ; pthread_atfork; unix: Unix._exit in Sboa.exit lives in the virtual
  ; library, listed here too so the link order is explicit.
  (libraries threads.posix unix)
  (foreign_stubs
   (language c)
-  (names pyembed_runtime pyembed_object pyembed_export frozen_stub)
+  (names sboa_runtime sboa_object sboa_export frozen_stub)
   ; gcc/clang flags (mingw-w64 gcc on Windows); MSVC is not supported.
   (flags
    (:standard
@@ -25,16 +25,16 @@
  (c_library_flags
   (:include link.sexp)))
 
-; Link flags for the CPython described by toolchain/cpython-embed.config
-; (probe.sh reads it; PYEMBED_CONFIG overrides it; PYEMBED_PREFIX goes
+; Link flags for the CPython described by toolchain/sboa.config
+; (probe.sh reads it; SBOA_CONFIG overrides it; SBOA_PREFIX goes
 ; through the toolchain rule).
 
 (rule
  (targets cflags.sexp link.sexp)
  (deps
   (:probe %{project_root}/probe.sh)
-  %{project_root}/toolchain/cpython-embed.config
-  (env_var PYEMBED_CONFIG)
-  (env_var PYEMBED_NO_LIBDIR_RPATH))
+  %{project_root}/toolchain/sboa.config
+  (env_var SBOA_CONFIG)
+  (env_var SBOA_NO_LIBDIR_RPATH))
  (action
   (run sh %{probe} %{targets})))

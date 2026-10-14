@@ -10,9 +10,9 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
 # LICENSE for more details.
 #
-"""Import Python modules from in-memory bundles (the ``pyembed`` bootstrap importer).
+"""Import Python modules from in-memory bundles (the ``sboa`` bootstrap importer).
 
-A *bundle* is a zip archive produced by ``tools/pyembed_bundle.py``: unchecked-hash
+A *bundle* is a zip archive produced by ``tools/sboa_bundle.py``: unchecked-hash
 ``.pyc`` files compiled at optimization level 0, data files, and trimmed
 ``*.dist-info`` directories.  The host hands every bundle to :func:`install` as a
 ``(name, buffer)`` pair, in search order; the buffer is typically a ``memoryview``
@@ -21,14 +21,14 @@ the filesystem.
 
 What :func:`install` sets up:
 
-* one :class:`PyembedFinder` on ``sys.meta_path`` (right after the frozen importer)
+* one :class:`SboaFinder` on ``sys.meta_path`` (right after the frozen importer)
   that resolves, in order: ``dev_overrides`` directories (through the standard
   ``PathFinder``, the editable-install equivalent), regular and package modules from
   the bundles, ``lib-dynload`` extension modules by name (``ExtensionFileLoader``),
   and implicit namespace packages (directories without ``__init__``) spanning
   bundles;
-* a loader per bundle giving modules ``__file__ = "<pyembed:NAME>/pkg/mod.py"``,
-  ``__path__ = ["<pyembed:NAME>/pkg"]``, ``get_data``, ``get_code``,
+* a loader per bundle giving modules ``__file__ = "<sboa:NAME>/pkg/mod.py"``,
+  ``__path__ = ["<sboa:NAME>/pkg"]``, ``get_data``, ``get_code``,
   ``get_source`` (always ``None``: bytecode only) and a ``TraversableResources``
   reader backed by ``zipfile.Path`` so ``importlib.resources.files(pkg)`` works;
 * ``find_distributions`` on the finder, so ``importlib.metadata.version()`` and
@@ -36,7 +36,7 @@ What :func:`install` sets up:
 
 Bootstrap constraints.  This module is frozen into the executable and runs before
 any filesystem or bundle importer exists, so at install time it may only use
-builtin modules (``sys``, ``marshal``, ``_imp``, ``_thread``, ``zlib``) and
+builtin modules (``sys``, ``marshal``, ``_imp``, ``_thread``) and
 modules that CPython itself freezes (``_frozen_importlib``,
 ``_frozen_importlib_external``, ``os``).  In particular it must not import
 ``importlib`` (not frozen), ``zipfile``, ``io`` wrappers beyond the frozen ``io``,
@@ -53,7 +53,6 @@ import _thread
 import marshal
 import os
 import sys
-import zlib
 
 TYPE_CHECKING = False
 if TYPE_CHECKING:
@@ -68,9 +67,9 @@ if TYPE_CHECKING:
 
     Buffer = Union[bytes, bytearray, memoryview]
 
-__all__ = ["install", "uninstall", "PyembedFinder", "BundleError"]
+__all__ = ["install", "uninstall", "SboaFinder", "BundleError"]
 
-_PREFIX = "<pyembed:"
+_PREFIX = "<sboa:"
 _EOCD_SIG = b"PK\x05\x06"
 _CDIR_SIG = b"PK\x01\x02"
 _LOCAL_SIG = b"PK\x03\x04"
@@ -199,6 +198,12 @@ class _Bundle:
         if e.method == _STORED:
             data = bytes(raw)
         elif e.method == _DEFLATED:
+            # zlib is imported on first use, not at install time: CPython
+            # builds that do not compile it into libpython (nix, Homebrew)
+            # keep it in lib-dynload, which only this importer's finder
+            # reaches once installed.
+            import zlib
+
             try:
                 data = zlib.decompress(raw, -15, e.usize)
             except zlib.error as exc:
@@ -242,7 +247,7 @@ class _BundleLoader:
         self._bundle = bundle
 
     def __repr__(self) -> str:
-        return f"<pyembed loader {self._bundle.name!r}>"
+        return f"<sboa loader {self._bundle.name!r}>"
 
     def _lookup(self, fullname: str) -> "tuple[str, bool]":
         try:
@@ -326,7 +331,7 @@ class _NamespaceLoader:
         self._bundles = list(bundles)
 
     def __repr__(self) -> str:
-        return f"<pyembed namespace loader {self._name!r}>"
+        return f"<sboa namespace loader {self._name!r}>"
 
     def create_module(self, spec: "Any") -> None:
         return None
@@ -341,7 +346,7 @@ class _NamespaceLoader:
         return None
 
     def get_code(self, fullname: str) -> "CodeType":
-        return compile("", f"<pyembed namespace {fullname}>", "exec")
+        return compile("", f"<sboa namespace {fullname}>", "exec")
 
     def get_resource_reader(self, fullname: str) -> "Any":
         from importlib.resources.abc import TraversableResources
@@ -376,7 +381,7 @@ def _make_reader(bundle: _Bundle, at: str) -> "Any":
     return _READER_CLASS[0](bundle, at)
 
 
-class PyembedFinder:
+class SboaFinder:
     """``sys.meta_path`` finder over bundles, ``lib-dynload`` and dev overrides."""
 
     def __init__(
@@ -399,7 +404,7 @@ class PyembedFinder:
         )
 
     def __repr__(self) -> str:
-        return f"<PyembedFinder bundles={[b.name for b in self.bundles]}>"
+        return f"<SboaFinder bundles={[b.name for b in self.bundles]}>"
 
     # -- helpers ------------------------------------------------------------
     def _bundles_for(
@@ -520,7 +525,7 @@ _NAME_CHARS = frozenset(
 
 
 def _valid_bundle_name(name: object) -> bool:
-    """Bundle names appear in ``<pyembed:NAME>`` paths: ``[A-Za-z0-9_.-]+``."""
+    """Bundle names appear in ``<sboa:NAME>`` paths: ``[A-Za-z0-9_.-]+``."""
     return isinstance(name, str) and name != "" and all(c in _NAME_CHARS for c in name)
 
 
@@ -543,7 +548,7 @@ def install(
     bundles: "Iterable[tuple[str, Buffer]]",
     libdynload_dir: "Optional[str]" = None,
     dev_overrides: "Iterable[str]" = (),
-) -> PyembedFinder:
+) -> SboaFinder:
     """Install the bundle importer on ``sys.meta_path`` and return it.
 
     ``bundles`` are ``(name, buffer)`` pairs in search order (first wins).  Each
@@ -571,7 +576,7 @@ def install(
         b = _Bundle(name, data)
         _check_magic(b)
         parsed.append(b)
-    finder = PyembedFinder(parsed, libdynload_dir, list(dev_overrides))
+    finder = SboaFinder(parsed, libdynload_dir, list(dev_overrides))
     uninstall()
     pos = len(sys.meta_path)
     for i, f in enumerate(sys.meta_path):
@@ -584,11 +589,11 @@ def install(
 
 def uninstall() -> None:
     """Remove any finder installed by :func:`install` from ``sys.meta_path``."""
-    sys.meta_path[:] = [f for f in sys.meta_path if not isinstance(f, PyembedFinder)]
+    sys.meta_path[:] = [f for f in sys.meta_path if not isinstance(f, SboaFinder)]
 
 
 def _check_magic(b: _Bundle) -> None:
-    # Comment format written by pyembed_bundle.py: "pyembed-bundle/1 name=N magic=HEX".
+    # Comment format written by sboa_bundle.py: "sboa-bundle/1 name=N magic=HEX".
     fields = dict(
         kv.split("=", 1)
         for kv in b.comment.decode("ascii", "replace").split()
@@ -596,7 +601,7 @@ def _check_magic(b: _Bundle) -> None:
     )
     magic = fields.get("magic")
     if magic is None:
-        raise BundleError(f"bundle {b.name!r} has no pyembed header (zip comment)")
+        raise BundleError(f"bundle {b.name!r} has no sboa header (zip comment)")
     try:
         found = bytes.fromhex(magic)
     except ValueError:

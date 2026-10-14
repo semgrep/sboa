@@ -1,0 +1,22 @@
+.DS_Store
+.idea
+*.log
+tmp/
+
+# opam
+_opam/
+*.install
+
+# dune
+_build/
+
+# python
+__pycache__/
+.pytest_cache/
+
+# direnv / devenv
+.direnv/
+.devenv/
+.devenv.flake.nix
+devenv.local.nix
+.pre-commit-config.yaml

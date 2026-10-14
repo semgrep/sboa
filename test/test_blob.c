@@ -20,23 +20,23 @@
 #include <caml/mlvalues.h>
 
 #if defined(__APPLE__)
-#define PYEMBED_SYM(s) "_" #s
-#define PYEMBED_SECTION ".section __TEXT,__const"
+#define SBOA_SYM(s) "_" #s
+#define SBOA_SECTION ".section __TEXT,__const"
 #elif defined(_WIN32)
-#define PYEMBED_SYM(s) #s
-#define PYEMBED_SECTION ".section .rdata,\"dr\""
+#define SBOA_SYM(s) #s
+#define SBOA_SECTION ".section .rdata,\"dr\""
 #else
-#define PYEMBED_SYM(s) #s
-#define PYEMBED_SECTION ".section .rodata"
+#define SBOA_SYM(s) #s
+#define SBOA_SECTION ".section .rodata"
 #endif
 
-#define PYEMBED_INCBIN(sym, file)                                     \
-  __asm__(PYEMBED_SECTION "\n"                                        \
-          ".globl " PYEMBED_SYM(sym) "\n"                             \
-          ".balign 16\n" PYEMBED_SYM(sym) ":\n"                       \
+#define SBOA_INCBIN(sym, file)                                     \
+  __asm__(SBOA_SECTION "\n"                                        \
+          ".globl " SBOA_SYM(sym) "\n"                             \
+          ".balign 16\n" SBOA_SYM(sym) ":\n"                       \
           ".incbin \"" file "\"\n"                                    \
-          ".globl " PYEMBED_SYM(sym##_end) "\n"                       \
-          PYEMBED_SYM(sym##_end) ":\n"                                \
+          ".globl " SBOA_SYM(sym##_end) "\n"                       \
+          SBOA_SYM(sym##_end) ":\n"                                \
           ".byte 0\n"                                                 \
           ".text\n");                                                 \
   extern const unsigned char sym[];                                   \
@@ -48,4 +48,4 @@
                               (intnat)(sym##_end - sym));             \
   }
 
-PYEMBED_INCBIN(pyembed_test_bundle, PYEMBED_TEST_PAYLOAD)
+SBOA_INCBIN(sboa_test_bundle, SBOA_TEST_PAYLOAD)

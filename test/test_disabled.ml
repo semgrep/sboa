@@ -10,34 +10,33 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(* pyembed.disabled: registration is accepted (it runs as a top-level effect
+(* sboa.disabled: registration is accepted (it runs as a top-level effect
    of linked libraries), anything needing an interpreter raises
    Not_available. *)
 
 let () =
-  Pyembed.Export.register ~module_:"_disabled_test" ~name:"f" (fun _ _ _ ->
-      Pyembed.Object.none)
+  Sboa.Export.register ~module_:"_disabled_test" ~name:"f" (fun _ _ _ ->
+      Sboa.Object.none)
 
 let raises_not_available f =
   match f () with
-  | _ -> Alcotest.fail "expected Pyembed.Not_available"
-  | exception Pyembed.Not_available -> ()
+  | _ -> Alcotest.fail "expected Sboa.Not_available"
+  | exception Sboa.Not_available -> ()
 
 let () =
-  Alcotest.run "pyembed.disabled"
+  Alcotest.run "sboa.disabled"
     [
       ( "disabled",
         [
           Alcotest.test_case "init" `Quick (fun () ->
               raises_not_available (fun () ->
-                  Pyembed.init (Pyembed.Config.default ())));
+                  Sboa.init (Sboa.Config.default ())));
           Alcotest.test_case "with_gil" `Quick (fun () ->
-              raises_not_available (fun () -> Pyembed.with_gil (fun _ -> ())));
+              raises_not_available (fun () -> Sboa.with_gil (fun _ -> ())));
           Alcotest.test_case "state" `Quick (fun () ->
               Alcotest.(check bool)
-                "not initialized" false
-                (Pyembed.is_initialized ());
-              Pyembed.gc_flush ();
-              Alcotest.(check bool) "none" true Pyembed.Object.(is_none none));
+                "not initialized" false (Sboa.is_initialized ());
+              Sboa.gc_flush ();
+              Alcotest.(check bool) "none" true Sboa.Object.(is_none none));
         ] );
     ]

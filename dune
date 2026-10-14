@@ -1,0 +1,8 @@
+; probe.sh turns sboa.config into C and link flags and runs the build-time
+; interpreter; installed into lib/sboa/ next to sboa.config and the tools,
+; so that applications' dune rules can use %{lib:sboa:probe.sh}.
+
+(install
+ (section lib)
+ (package sboa)
+ (files probe.sh))

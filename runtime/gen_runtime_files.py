@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Install helper for cpython-embed's runtime files.
+"""Install helper for the CPython runtime files of an sboa application.
 
-``cpython-embed.config`` (written by ../toolchain/fetch.sh) lists, in
-``runtime_files``, the files that must sit next to the final executable: the
-shared library and the extension modules.
-``gen_runtime_files.py CONFIG --layout libs|bin --out DIR`` copies them into
-DIR (modes preserved) when the platform's layout matches, and creates an empty
-DIR otherwise.  Run as the action of a dune rule with ``(targets (dir DIR))``
-it lets a dune project install the files without any platform knowledge:
+``sboa.config`` (written by sboa's toolchain/describe.py; installed as
+``%{lib:sboa:sboa.config}``) lists, in ``runtime_files``, the files that must
+sit next to the final executable: the shared library and the extension
+modules. ``gen_runtime_files.py CONFIG --layout libs|bin --out DIR`` copies
+them into DIR (modes preserved) when the platform's layout matches, and
+creates an empty DIR otherwise. Run as the action of a dune rule with
+``(targets (dir DIR))`` it lets a dune project install the files without any
+platform knowledge:
 
   libs  Linux/macOS: runtime_subdir is ``libs``; the files land in bin/libs/.
   bin   Windows: runtime_subdir is empty; DLLs and .pyd land in bin/, next to
@@ -20,9 +21,9 @@ cannot flow into the stanza; whole directories can.)
 The Windows ``install`` stanza therefore names every file by hand. With
 ``--check-install-list FILE`` (the dune file holding that stanza) the staged
 ``bin`` layout must be exactly the ``(runtime_bin/NAME as NAME)`` entries of
-FILE, otherwise the build fails: a python-build-standalone bump that adds,
-drops or renames a DLL or extension module is caught here instead of as a
-missing file at run time.
+FILE, otherwise the build fails: a CPython upgrade that adds, drops or
+renames a DLL or extension module is caught here instead of as a missing file
+at run time.
 
 Standard library only.
 """
@@ -92,8 +93,7 @@ def _str(cfg: Dict[str, Sexp], key: str) -> str:
 
 
 def runtime_entries(cfg: Dict[str, Sexp]) -> List[Tuple[str, str]]:
-    """(source relative to prefix, destination relative to bin/<subdir>/)."""
-    prefix = _str(cfg, "prefix").rstrip("/\\")
+    """(absolute source, destination relative to bin/<subdir>/)."""
     files = cfg.get("runtime_files")
     if not isinstance(files, list):
         raise ValueError("config field 'runtime_files' missing or not a list")
@@ -104,35 +104,27 @@ def runtime_entries(cfg: Dict[str, Sexp]) -> List[Tuple[str, str]]:
         src, dest = item
         if not (isinstance(src, str) and isinstance(dest, str)):
             raise ValueError(f"malformed runtime_files entry: {item!r}")
-        rel = os.path.relpath(src, prefix).replace(os.sep, "/")
-        if rel.startswith(".."):
-            raise ValueError(f"runtime file {src!r} is outside the prefix {prefix!r}")
-        out.append((rel, dest))
+        if not os.path.isabs(src):
+            raise ValueError(f"runtime file {src!r} is not an absolute path")
+        if os.path.isabs(dest) or ".." in dest.replace("\\", "/").split("/"):
+            raise ValueError(f"runtime file destination {dest!r} escapes the directory")
+        out.append((src, dest))
     return out
 
 
-NOTICES_FILE = "THIRD_PARTY_NOTICES.txt"
-
-
-def stage(cfg: Dict[str, Sexp], layout: str, out_dir: str) -> None:
+def stage(cfg: Dict[str, Sexp], layout: str, out_dir: str) -> bool:
     """Copy the runtime files into [out_dir]/<dest> if the config's layout is
     [layout] ("libs": runtime_subdir is non-empty; "bin": it is empty), else
-    just create the empty [out_dir]. The licence notices of the components
-    compiled into the runtime ([NOTICES_FILE], next to this script) are copied
-    next to them, so that every distribution of the runtime carries them."""
-    root = _str(cfg, "prefix")
+    just create the empty [out_dir]. Returns whether anything was staged."""
     os.makedirs(out_dir, exist_ok=True)
     if ("libs" if _str(cfg, "runtime_subdir") else "bin") != layout:
-        return
+        return False
     for src, dest in runtime_entries(cfg):
         out = os.path.join(out_dir, dest)
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        shutil.copyfile(os.path.join(root, src), out)
-        shutil.copymode(os.path.join(root, src), out)
-    here = os.path.dirname(os.path.abspath(__file__))
-    shutil.copyfile(
-        os.path.join(here, NOTICES_FILE), os.path.join(out_dir, NOTICES_FILE)
-    )
+        shutil.copyfile(src, out)
+        shutil.copymode(src, out)
+    return True
 
 
 _INSTALL_ENTRY = re.compile(r"\(\s*runtime_bin/([^\s()]+)\s+as\s+([^\s()]+)\s*\)")
@@ -172,15 +164,14 @@ def check_install_list(out_dir: str, list_file: str) -> None:
         lines.append(f"  installed but not staged: {name}")
     lines.append(
         "Update the (runtime_bin/NAME as NAME) entries of the Windows install"
-        " stanza (and the exclusions in toolchain/fetch.sh if a file must not"
-        " ship)."
+        " stanza."
     )
     raise SystemExit("gen_runtime_files.py: " + "\n".join(lines))
 
 
 def main(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(description="cpython-embed runtime-file helper")
-    ap.add_argument("config", help="path to cpython-embed.config")
+    ap = argparse.ArgumentParser(description="sboa runtime-file helper")
+    ap.add_argument("config", help="path to sboa.config")
     ap.add_argument("--layout", choices=["libs", "bin"], required=True)
     ap.add_argument("--out", required=True, help="directory to populate")
     ap.add_argument(
@@ -191,8 +182,7 @@ def main(argv: List[str]) -> int:
     )
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
-    stage(cfg, args.layout, args.out)
-    staged_here = ("libs" if _str(cfg, "runtime_subdir") else "bin") == args.layout
+    staged_here = stage(cfg, args.layout, args.out)
     if args.check_install_list and args.layout == "bin" and staged_here:
         check_install_list(args.out, args.check_install_list)
     return 0

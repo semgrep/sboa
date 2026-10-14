@@ -10,7 +10,7 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(* Child process for the exit and init-failure tests (Pyembed.exit and a
+(* Child process for the exit and init-failure tests (Sboa.exit and a
    failed init both end or poison the process). Modes (first argument):
    - exit: leaves unflushed output in Python's sys.stdout and OCaml's stdout,
      registers Python and OCaml exit handlers, exits with code 3;
@@ -19,37 +19,37 @@
    - init-fail: start-up fails; later init/with_gil re-raise the same
      failure without retrying. *)
 
-let stdlib = Sys.getenv "PYEMBED_STDLIB"
+let stdlib = Sys.getenv "SBOA_STDLIB"
 
 let config () =
   {
-    (Pyembed.Config.default ()) with
+    (Sboa.Config.default ()) with
     extra_sys_path = [ stdlib; Filename.concat stdlib "lib-dynload" ];
   }
 
-let exec code = Pyembed.with_gil (fun gil -> Pyembed.exec gil code)
+let exec code = Sboa.with_gil (fun gil -> Sboa.exec gil code)
 
 let init_fail () =
   (* no stdlib and no frozen encodings: Py_InitializeFromConfig fails *)
   let first =
-    match Pyembed.init (Pyembed.Config.default ()) with
+    match Sboa.init (Sboa.Config.default ()) with
     | () -> "initialized"
     | exception Failure m -> m
   in
   let again =
-    match Pyembed.with_gil (fun _ -> ()) with
+    match Sboa.with_gil (fun _ -> ()) with
     | () -> "usable"
     | exception Failure m -> m
   in
   let init_again =
-    match Pyembed.init (config ()) with
+    match Sboa.init (config ()) with
     | () -> "initialized"
     | exception Failure m -> m
   in
   if
     String.equal first again
     && String.equal first init_again
-    && not (Pyembed.is_initialized ())
+    && not (Sboa.is_initialized ())
   then print_endline "[same failure, no retry]"
   else Printf.printf "[different] %S %S %S\n" first again init_again;
   Stdlib.exit 0
@@ -58,27 +58,27 @@ let () =
   match Array.to_list Sys.argv with
   | [ _; "init-fail" ] -> init_fail ()
   | [ _; "threads" ] ->
-      Pyembed.init (config ());
+      Sboa.init (config ());
       exec
         "import sys, threading, time\n\
          def late():\n\
         \    time.sleep(0.3)\n\
         \    sys.stdout.write('[thread done]')\n\
          threading.Thread(target=late).start()\n";
-      Pyembed.exit ~code:0
+      Sboa.exit ~code:0
   | [ _; "flush-fail" ] ->
-      Pyembed.init (config ());
+      Sboa.init (config ());
       exec
         "import sys\n\
          sys.stdout = open('/dev/full', 'w')\n\
          sys.stdout.write('x')\n";
-      Pyembed.exit ~code:0
+      Sboa.exit ~code:0
   | _ ->
-      Pyembed.init (config ());
+      Sboa.init (config ());
       at_exit (fun () -> print_string "[ocaml at_exit]");
       print_string "[ocaml buffered]";
       exec
         "import atexit, sys\n\
          atexit.register(lambda: sys.stdout.write('[python atexit]'))\n\
          sys.stdout.write('[python buffered]')\n";
-      Pyembed.exit ~code:3
+      Sboa.exit ~code:3

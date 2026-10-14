@@ -1,91 +1,196 @@
-# pyembed
+# sboa
 
-Embed CPython in an OCaml executable: a dune virtual library (`pyembed`) with
-two implementations, `pyembed.cpython` (the bridge, linked against a shared
-libpython) and `pyembed.disabled` (every primitive raises
-`Pyembed.Not_available`), plus `pyembed.stdlib` (the CPython standard library
-compiled into the executable), `pyembed.frozen` (the frozen importer table) and
-the bundle tool `tools/pyembed_bundle.py`. Nothing here is specific to an
-application.
+sboa ("Sand Boa"; formerly `pyembed`) embeds CPython 3.13 in an OCaml
+executable. It is a dune virtual library (`sboa`) with two implementations:
 
-## Where CPython comes from: `toolchain/`
-
-| File | Purpose |
+| Library | What |
 |---|---|
-| `toolchain/pbs.json` | The manifest: python-build-standalone release, CPython version, archive flavour (`install_only_stripped`) and, per target triple, the archive file name, its sha256 and the platform id written to the config. |
-| `toolchain/fetch.sh` | `fetch.sh TARGET MANIFEST OUT_DIR [WORKSPACE_ROOT]`: maps the OCaml target (`%{ocaml-config:target}`) to a manifest entry, downloads the archive into the cache unless a file with the right sha256 is already there, checks the sha256, unpacks it into `OUT_DIR/prefix` and writes `OUT_DIR/cpython-embed.config`. POSIX sh with curl or wget, sha256sum or shasum, tar and sed. |
-| `toolchain/dune` | The rule running `fetch.sh` (targets `cpython-embed.config` and the directory `prefix`). Every rule that needs CPython depends on `toolchain/cpython-embed.config`. |
-| `toolchain/cache/` | Downloaded archives (git-ignored), reused across builds and `dune clean`. |
+| `sboa` | the bridge: GIL tokens, owned object handles with deferred release, fallible conversions, OCaml functions and classes exported as builtin Python modules, exception translation both ways, signal routing, atomic counters (`src/sboa.mli`) |
+| `sboa.cpython` | the implementation linked against a shared libpython |
+| `sboa.disabled` | the implementation for executables that must not carry Python: every primitive raises `Sboa.Not_available` |
+| `sboa.stdlib` | the standard library of the CPython built against, compiled to bytecode and embedded in the executable (registered at priority 0) |
+| `sboa.frozen` | the frozen-module table: the bundle importer (`python/_sboa_importer.py`) and the `encodings` package interpreter start-up needs |
+| `sboa.toolchain` | facts about the CPython an executable was built against (version, platform, its `lib-dynload` directory) |
 
-`make cpython-embed` builds only this rule (the only step that needs the
-network, and only while the archive is not cached). Inputs:
+plus the build-time tools `sboa_bundle.py` (Python bundles, the frozen table,
+the seam check), `probe.sh` (C and link flags, the build-time
+interpreter) and `gen_runtime_files.py` (stages the files an application ships
+next to its executable). Nothing here is specific to an application.
 
-- `PYEMBED_ARCHIVE_DIR=<absolute dir>`: look for (and download into) the
-  archive in `<dir>` instead of `toolchain/cache/`. With the archive already
-  there the build is offline. A private copy of the archive is sha256-checked
-  and unpacked, so a shared directory is safe.
-- `PYEMBED_PREFIX=<absolute prefix>`: use an installed CPython of the same
-  minor version (shared libpython, no free threading, no `Py_DEBUG`, and a
-  libpython whose `Py_GetVersion` is the interpreter's; Homebrew's
-  `python@3.13` is
-  `$(brew --prefix python@3.13)/Frameworks/Python.framework/Versions/3.13`)
-  instead of the archive: nothing is downloaded or copied, the config points
-  into the prefix (its logical path, so an `opt/` symlink survives upgrades),
-  its `runtime_files` is empty, and executables find libpython through the
-  absolute rpath `probe.sh` adds. Such builds keep C extension modules in
-  their own `lib-dynload`: it is recorded as `external_libdynload_dir` and
-  compiled into `pyembed.toolchain`, whose `libdynload_dir ()` is the value an
-  application passes as `Pyembed.Config.libdynload_dir` (the fallback when no
-  `libs/python3.X/lib-dynload` sits next to the executable). The rule tracks
-  the prefix's `bin/python3*` and `lib/libpython3*`, so an upgraded install
-  re-runs it. Unix layouts only. `PYEMBED_PREFIX` is read by `fetch.sh` only;
-  everything else reads the config.
-- `CPYTHON_EMBED_MAGIC`: bytecode magic number, when the interpreter cannot run
-  on the build machine.
+Supported: Linux (glibc and musl) and macOS on x86_64 and arm64, Windows
+x86_64 with the mingw-w64 OCaml port (gcc; MSVC is not supported). OCaml 5.3
+or newer.
 
-Supported targets: x86_64 and aarch64 Linux (glibc and musl), x86_64 and arm64
-macOS, x86_64 Windows (mingw OCaml; the archive is the MSVC build, which keeps
-its own layout). Moving to another CPython release means editing `pbs.json`
-only (and the hard-coded Windows DLL list in `runtime/runtime_files.dune.inc`
-if the set of extension modules changes; the Windows build fails, naming the
-files, until the list matches what the archive stages).
+## Where CPython comes from
 
-## `cpython-embed.config`
+sboa never downloads anything. It builds against an installed CPython 3.13,
+found by `toolchain/find_python.sh` in this order:
 
-One sexp, a list of `(field value)` pairs; strings except `magic` (int) and
-`runtime_files` (list of `(src dest)`). Paths are absolute, with forward
-slashes. Consumers must ignore unknown fields.
+1. `SBOA_PYTHON=<interpreter>` (a path, or a name looked up on `PATH`);
+2. `SBOA_PREFIX=<installation prefix>` (absolute): its `bin/python3.13`,
+   `bin/python3`, or `python.exe` on Windows;
+3. `python3.13`, then `python3`, on `PATH`.
+
+The CPython must be 3.13.x, built with a shared libpython (`--enable-shared`;
+always the case on Windows), without free threading and without `Py_DEBUG`;
+otherwise the build stops and says how to point at another one. Known to work:
+[python-build-standalone](https://github.com/astral-sh/python-build-standalone)
+`install_only` archives, Debian/Ubuntu/Fedora packages with their `-dev`
+headers, Homebrew's `python@3.13`
+(`SBOA_PREFIX=$(brew --prefix python@3.13)/Frameworks/Python.framework/Versions/3.13`),
+nixpkgs' `python313`, and the python.org Windows layout (`python.exe`,
+`python313.dll`, `include/`, `libs/python313.lib`, `DLLs/`).
+
+`toolchain/describe.py`, run under that interpreter (standard library only:
+`sys` and `sysconfig` plus the installation's layout), writes
+`toolchain/sboa.config` and the data module of `sboa.toolchain`. The rule
+tracks `SBOA_PREFIX`, `SBOA_PYTHON`, `SBOA_MAGIC` and, under `SBOA_PREFIX`,
+`bin/python3*` and `lib/libpython3*`; the config records the interpreter's
+`sys.version` and libpython's size and mtime, so upgrading the installation
+rebuilds everything that depends on it. An installed sboa (opam) records the
+paths of the CPython it was built against: after moving or replacing that
+CPython, reinstall sboa (`opam reinstall sboa`).
+
+## `sboa.config`
+
+One sexp, a list of `(field value)` pairs; strings except `magic` (an int) and
+`runtime_files` (a list of `(source destination)` pairs). Paths are absolute,
+with forward slashes; values containing `"`, `)` or a backslash are refused.
+Consumers must ignore unknown fields.
 
 | Field | Meaning |
 |---|---|
-| `version` | CPython version, e.g. `3.13.16` |
+| `version` | the CPython version, e.g. `3.13.16` |
 | `platform` | `linux-gnu-x86_64`, `linux-gnu-aarch64`, `linux-musl-x86_64`, `linux-musl-aarch64`, `macos-x86_64`, `macos-arm64` or `windows-x86_64`; the bundle tool evaluates wheel markers for it |
-| `magic` | importlib bytecode magic as an int (3571 for 3.13) |
-| `release`, `archive_sha256` | the python-build-standalone release and the archive's sha256 (downloaded archive only): a manifest change always changes the config, so every rule depending on it re-runs |
-| `install_fingerprint` | `PYEMBED_PREFIX` only: the interpreter's `sys.version` and libpython's size and mtime, for the same reason |
-| `external_libdynload_dir` | `PYEMBED_PREFIX` only: the external CPython's `lib-dynload` (empty otherwise) |
-| `prefix`, `incdir`, `libdir`, `stdlib_dir`, `libdynload_dir`, `python_exe` | paths into the CPython tree |
-| `lib_name` | `python3.13` (`python313` on Windows) |
-| `lib_file` | the library to link by full path: `libpython3.13.so.1.0`, `libpython3.13.dylib` or `libs/python313.lib` |
-| `runtime_subdir` | directory under `bin/` the runtime files install into: `libs` on Linux and macOS, empty on Windows |
-| `runtime_libdynload` | extension-module directory relative to `bin/<runtime_subdir>/` (empty when there is none) |
-| `runtime_files` | the files that must sit next to the executable: libpython on Linux and macOS; the DLLs and `.pyd` files (without Tk and the test modules) on Windows |
+| `magic` | importlib bytecode magic as an int (3571 for 3.13); `SBOA_MAGIC` overrides it |
+| `install_fingerprint` | the interpreter's `sys.version` and libpython's size and mtime |
+| `prefix` | the installation prefix (`SBOA_PREFIX` as given, so a Homebrew `opt/` path survives upgrades; else `sys.base_prefix`) |
+| `incdir`, `stdlib_dir` | `sysconfig`'s `include` and `stdlib` paths |
+| `libdir`, `lib_file`, `lib_name` | the library linked by full path (`libpython3.13.so.1.0` or `.so`, `libpython3.13.dylib`, or the import library `libs/python313.lib`), its directory, and `python3.13` / `python313` |
+| `libdynload_dir` | the extension-module directory (`<stdlib>/lib-dynload`, `DLLs/` on Windows) |
+| `external_libdynload_dir` | `libdynload_dir` when it holds extension modules that ship (empty for python-build-standalone, whose modules are compiled into libpython, and on Windows); compiled into `sboa.toolchain` as the fallback for executables run without their runtime files |
+| `python_exe` | the interpreter (build time only) |
+| `runtime_subdir` | the directory under `bin/` the runtime files install into: `libs` on Linux and macOS, empty on Windows |
+| `runtime_libdynload` | the extension-module directory relative to `bin/<runtime_subdir>/` |
+| `runtime_files` | what must sit next to the executable for it to run without the CPython installation: libpython (under its SONAME; left out for macOS framework builds, whose absolute install name is always used) and the `lib-dynload` modules on Linux and macOS; `python313.dll`, `python3.dll`, the `vcruntime` DLLs and the `.pyd`/`.dll` files of `DLLs/` on Windows. Tk and CPython's test modules are left out. |
 
-Paths containing `"`, `)` or a backslash are refused by `fetch.sh` (the
-readers do not unescape them). `probe.sh` turns the config into compiler and
-linker flags (`$PYEMBED_CONFIG` overrides it); `runtime/` installs `runtime_files`
-(`bin/libs/` or next to the `.exe`) together with `THIRD_PARTY_NOTICES.txt`.
+Executables linked with `sboa.cpython` get two rpaths on Linux and macOS:
+`$ORIGIN/libs` / `@loader_path/libs` (where the runtime files ship) and the
+absolute `libdir` (so test binaries in `_build` run). Release builds that must
+not carry the build machine's path set `SBOA_NO_LIBDIR_RPATH=1` when building
+sboa. On Windows the DLLs live next to the `.exe`.
+
+## Using sboa from dune
+
+An installed sboa puts `sboa.config`, `probe.sh`, `sboa_bundle.py` and
+`gen_runtime_files.py` in `lib/sboa/`; dune rules reference them as
+`%{lib:sboa:...}` (which also makes them dependencies). `SBOA_CONFIG`
+overrides the config `probe.sh` reads.
+
+Link `sboa` and one implementation, and usually the stdlib and the frozen
+importer:
+
+```dune
+(executable
+ (name main)
+ (libraries sboa sboa.cpython sboa.stdlib sboa.frozen))
+```
+
+Bundle application code (a Python package directory, or wheels with
+`--wheels`) into a module that registers itself when linked:
+
+```dune
+(rule
+ (targets app_bundle.ml app_bundle.zip app_bundle_blob.c)
+ (deps (source_tree mypkg))
+ (action
+  (run sh %{lib:sboa:probe.sh} --exec-python -I %{lib:sboa:sboa_bundle.py}
+   --config %{lib:sboa:sboa.config} bundle --name app
+   --package mypkg=mypkg --out . --base app_bundle)))
+```
+
+(add `app_bundle` to the executable's `modules` and `app_bundle_blob` to its
+`foreign_stubs`, with `(extra_deps app_bundle.zip)`). `probe.sh
+--exec-python` runs the interpreter of the config, so no other Python is
+needed at build time.
+
+Install the runtime files next to the executables (libpython and extension
+modules under `bin/libs/` on Linux and macOS; DLLs next to the `.exe` on
+Windows):
+
+```dune
+(rule
+ (enabled_if (<> %{os_type} Win32))
+ (targets (dir runtime_libs))
+ (action
+  (run sh %{lib:sboa:probe.sh} --exec-python -I
+   %{lib:sboa:gen_runtime_files.py} %{lib:sboa:sboa.config}
+   --layout libs --out runtime_libs)))
+
+(install
+ (enabled_if (<> %{os_type} Win32))
+ (package app)
+ (section bin)
+ (dirs (runtime_libs as libs)))
+
+(rule
+ (enabled_if (= %{os_type} Win32))
+ (targets (dir runtime_bin))
+ (action
+  (run sh %{lib:sboa:probe.sh} --exec-python -I
+   %{lib:sboa:gen_runtime_files.py} %{lib:sboa:sboa.config}
+   --layout bin --out runtime_bin
+   --check-install-list %{dep:dune})))
+
+(install
+ (enabled_if (= %{os_type} Win32))
+ (package app)
+ (section bin)
+ (files
+  (runtime_bin/python313.dll as python313.dll)
+  (runtime_bin/python3.dll as python3.dll)
+  ; ... one entry per file: dune's install stanza takes no globs over a
+  ; directory target; --check-install-list fails the build when the list
+  ; and the staged files differ
+  (runtime_bin/vcruntime140.dll as vcruntime140.dll)))
+```
+
+The directory targets need `(using directory-targets 0.1)` in the consumer's
+`dune-project`; an empty directory target is an error, hence the
+`enabled_if`s.
+
+Executables built with `-noautolink` must pass the link flags themselves: the
+stub archives `-lsboa_cpython_stubs`, `-lsboa_frozen_stubs`,
+`-lsboa_stdlib_stubs`, then `lib_file` from the config and the two rpaths
+above.
 
 ## Building and testing
 
 ```bash
-make -C OSS/libs/pyembed build     # libraries, stdlib bundle, frozen table, tests
-make -C OSS/libs/pyembed test      # pyembed.disabled, importer and pyembed suites
-make -C OSS/libs/pyembed install   # + runtime files (bin/libs/ or the DLLs)
+export SBOA_PREFIX=/path/to/cpython-3.13
+make             # dune build @install
+make test        # alcotest suites, importer test, runtime-file staging
+make test-tools  # the bundle tool's pytest suite (python3 -m pytest)
+make fmt-check   # ocamlformat
 ```
 
-The Makefile wraps `dune build --root .`; inside a larger dune workspace the
-same rules run from there, with their own `_build` but the same archive cache.
-An opam package of pyembed would need the archive as an `extra-source` (pointed
-to by `PYEMBED_ARCHIVE_DIR`) or an installed CPython (`PYEMBED_PREFIX`), since
-opam builds have no network.
+`opam install . --deps-only --with-test` installs the OCaml dependencies.
+sboa builds as an opam package the same way: opam builds have no network,
+which is fine since sboa downloads nothing, but the CPython must be installed
+beforehand and named on the `opam install` command line, e.g.
+`SBOA_PREFIX=$HOME/cpython opam install sboa`.
+
+### devenv
+
+[devenv](https://devenv.sh) provides everything (OCaml, dune, alcotest,
+ocamlformat, CPython 3.13 with pytest, `SBOA_PREFIX` set to nixpkgs'
+`python313`):
+
+```bash
+devenv shell   # or `direnv allow` with the provided .envrc
+devenv test    # build, test, test-tools, fmt-check (what CI runs)
+```
+
+## Licence
+
+LGPL-2.1-only, see `LICENSE`.

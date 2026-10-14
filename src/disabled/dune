@@ -1,9 +1,9 @@
-; pyembed.disabled: the implementation of the pyembed virtual library for
+; sboa.disabled: the implementation of the sboa virtual library for
 ; executables and tests that must not carry Python. Export registration
 ; works (it is a top-level effect of linked libraries); everything that
-; would need an interpreter raises Pyembed.Not_available.
+; would need an interpreter raises Sboa.Not_available.
 
 (library
- (name pyembed_disabled)
- (public_name pyembed.disabled)
- (implements pyembed))
+ (name sboa_disabled)
+ (public_name sboa.disabled)
+ (implements sboa))

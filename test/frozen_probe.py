@@ -10,5 +10,5 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
 # LICENSE for more details.
 #
-"""Frozen into the test executable's pyembed_frozen_table."""
+"""Frozen into the test executable's sboa_frozen_table."""
 VALUE = "from the frozen table"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time tool for ``pyembed``: Python bundles, the frozen table, the seam check.
+"""Build-time tool for ``sboa``: Python bundles, the frozen table, the seam check.
 
 Run it with the embedded interpreter (the bytecode it writes is only valid for the
 interpreter that compiled it; ``--python`` re-executes the tool under the given
@@ -12,7 +12,7 @@ Subcommands::
                sources that embed it with ``.incbin``
   stdlib       same, for the interpreter's standard library (with the exclusion list)
   embed        emit the C/OCaml embedding sources for an existing bundle zip
-  freeze       marshal modules into ``struct _frozen pyembed_frozen_table[]`` (C)
+  freeze       marshal modules into ``struct _frozen sboa_frozen_table[]`` (C)
   check-seam   diff the attributes a bundle's bytecode uses on a module against the
                names the native side exports
   fetch-wheels download the pure-Python wheels of a ``uv.lock`` closure
@@ -27,7 +27,7 @@ set constants, so the tool re-executes itself with ``PYTHONHASHSEED=0``.
 Generated-file contract (see ``docs/single-binary/notes/u3.md``): for ``--name N``
 the base name is ``N_bundle`` and the tool writes ``N_bundle.zip``,
 ``N_bundle_blob.c`` (defines ``const unsigned char N_bundle[]``,
-``const size_t N_bundle_len`` and the OCaml primitive ``pyembed_incbin_N_bundle``)
+``const size_t N_bundle_len`` and the OCaml primitive ``sboa_incbin_N_bundle``)
 and ``N_bundle.ml``.
 """
 import argparse
@@ -77,12 +77,11 @@ STDLIB_EXCLUDED_TOP = frozenset(
 )
 STDLIB_EXCLUDED_ANYWHERE = frozenset({"tests", "idle_test", "__pycache__"})
 # Files kept from each *.dist-info directory.  importlib.metadata needs METADATA
-# (version(), requires()) and entry_points.txt (entry_points()); licence, notice and
-# authors files ship with the code they cover (also at the top of dist-info/licenses/,
-# where PEP 639 puts them) and feed ``--notices-out``.
+# (version(), requires()) and entry_points.txt (entry_points()); licences ship with
+# the code they cover.
 DIST_INFO_KEEP = re.compile(
     r"^(METADATA|entry_points\.txt|top_level\.txt|"
-    r"(LICEN[CS]E|LICENCE|COPYING|NOTICE|AUTHORS)[^/]*|licenses/.*)$"
+    r"(LICEN[CS]E|COPYING|NOTICE|AUTHORS)[^/]*|licenses/.*)$"
 )
 
 
@@ -102,7 +101,7 @@ BUNDLE_NAME_RE = re.compile(r"[A-Za-z0-9_.\-]+")
 
 
 def validate_bundle_name(name: str) -> str:
-    """Bundle names end up in ``<pyembed:NAME>`` paths, zip comments and OCaml
+    """Bundle names end up in ``<sboa:NAME>`` paths, zip comments and OCaml
     string literals: restrict them to ``[A-Za-z0-9_.-]+``."""
     if not BUNDLE_NAME_RE.fullmatch(name):
         raise UsageError(f"invalid bundle name {name!r} (allowed: [A-Za-z0-9_.-]+)")
@@ -250,7 +249,7 @@ class BundleContents:
 
     def add_source(self, arc_py: str, source: bytes, origin: str) -> None:
         """Compile ``arc_py`` (a ``.py`` arcname) and add the ``.pyc``."""
-        filename = f"<pyembed:{self.name}>/{arc_py}"
+        filename = f"<sboa:{self.name}>/{arc_py}"
         try:
             pyc = compile_pyc(source, filename)
         except SyntaxError as e:
@@ -308,155 +307,6 @@ def add_package(
 
 def keep_dist_info_file(rel_in_dist_info: str) -> bool:
     return bool(DIST_INFO_KEEP.match(rel_in_dist_info))
-
-
-# ---------------------------------------------------------------------------
-# Licence notices
-# ---------------------------------------------------------------------------
-
-NOTICES_HEADER = """\
-Licence notices for the Python packages bundled in this executable
-==================================================================
-
-The packages below are compiled to bytecode and embedded in the executable.
-Each section gives the package, the licence it declares in its metadata, its
-homepage and the full text of the licence and notice files shipped in its
-distribution.  Copyright remains with the respective authors.
-"""
-
-# Licence families whose terms ask for more than the licence text (the source
-# of the covered files must be obtainable).  Matched on the declared licence.
-SOURCE_AVAILABLE_NOTE = (
-    "This package is licensed under the Mozilla Public License 2.0 (MPL-2.0). "
-    "It is included unmodified; its source code is available at {url} and on "
-    "PyPI (https://pypi.org/project/{name}/{version}/#files)."
-)
-
-
-@dataclass
-class DistNotice:
-    """What the notices file says about one bundled distribution."""
-
-    name: str
-    version: str
-    license: str
-    homepage: str
-    texts: List[Tuple[str, str]]  # (file name within the dist-info, text)
-
-
-def parse_core_metadata(data: bytes) -> Dict[str, List[str]]:
-    """The header fields of a core-metadata (METADATA) file, in order."""
-    import email.parser
-
-    msg = email.parser.BytesParser().parsebytes(data, headersonly=True)
-    out: Dict[str, List[str]] = {}
-    for k, v in msg.items():
-        out.setdefault(k.lower(), []).append(" ".join(str(v).split()))
-    return out
-
-
-def declared_license(fields: Dict[str, List[str]]) -> str:
-    """``License-Expression``, else ``License`` (when a short identifier, not a
-    pasted licence text), else the ``License ::`` classifiers, else ""."""
-    expr = fields.get("license-expression", [""])[0]
-    if expr:
-        return expr
-    lic = fields.get("license", [""])[0]
-    if lic and lic.upper() not in ("UNKNOWN", "NONE") and len(lic) <= 100:
-        return lic
-    cls = [
-        c.rsplit("::", 1)[-1].strip()
-        for c in fields.get("classifier", [])
-        if c.startswith("License ::")
-    ]
-    cls = [c for c in cls if c != "OSI Approved"]
-    return ", ".join(cls)
-
-
-def homepage_of(fields: Dict[str, List[str]]) -> str:
-    """``Home-page``, else the first ``Project-URL`` named like a homepage or
-    source link, else the first ``Project-URL``."""
-    if fields.get("home-page"):
-        return fields["home-page"][0]
-    urls: List[Tuple[str, str]] = []
-    for v in fields.get("project-url", []):
-        label, _, url = v.partition(",")
-        urls.append((label.strip().lower(), url.strip()))
-    for want in ("homepage", "home", "source", "repository", "github"):
-        for label, url in urls:
-            if label == want and url:
-                return url
-    return urls[0][1] if urls else ""
-
-
-def collect_notices(members: Dict[str, "Member"]) -> List[DistNotice]:
-    """One DistNotice per ``*.dist-info`` directory among the bundle members
-    (those with a METADATA file), sorted by normalized name."""
-    dists: Dict[str, Dict[str, bytes]] = {}
-    for arc, m in members.items():
-        top, _, rest = arc.partition("/")
-        if top.endswith(".dist-info") and rest:
-            dists.setdefault(top, {})[rest] = m.data
-    out: List[DistNotice] = []
-    for di, files in dists.items():
-        if "METADATA" not in files:
-            continue
-        fields = parse_core_metadata(files["METADATA"])
-        texts = [
-            (rel, files[rel].decode("utf-8", "replace").strip("\r\n") + "\n")
-            for rel in sorted(files)
-            if rel != "METADATA"
-            and keep_dist_info_file(rel)
-            and not rel.endswith("/")
-            and rel not in ("entry_points.txt", "top_level.txt")
-        ]
-        name = fields.get("name", [di.rpartition("-")[0]])[0]
-        version = fields.get("version", [di[: -len(".dist-info")].rpartition("-")[2]])[
-            0
-        ]
-        out.append(
-            DistNotice(
-                name, version, declared_license(fields), homepage_of(fields), texts
-            )
-        )
-    out.sort(key=lambda d: (normalize_dist(d.name), d.version))
-    return out
-
-
-def render_notices(dists: Sequence[DistNotice]) -> str:
-    """The text of the notices file for [dists] (deterministic)."""
-    rule = "=" * 78
-    parts = [NOTICES_HEADER]
-    for d in dists:
-        parts.append(
-            f"{rule}\n{d.name} {d.version}\n{rule}\n"
-            f"Declared licence: {d.license or '(none declared in the package metadata)'}\n"
-            f"Homepage: {d.homepage or '(none declared)'}\n"
-        )
-        if "MPL" in d.license.upper() or "MOZILLA PUBLIC" in d.license.upper():
-            parts.append(
-                SOURCE_AVAILABLE_NOTE.format(
-                    url=d.homepage or "https://pypi.org/project/" + d.name + "/",
-                    name=normalize_dist(d.name),
-                    version=d.version,
-                )
-                + "\n"
-            )
-        if not d.texts:
-            parts.append(
-                "No licence or notice file is shipped in this distribution; "
-                "see the homepage above for the licence terms.\n"
-            )
-        for rel, text in d.texts:
-            parts.append(f"--- {rel} ---\n\n{text}")
-    return "\n".join(parts) + "\n"
-
-
-def write_notices(contents: BundleContents, out: Path) -> None:
-    dists = collect_notices(contents.members)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_notices(dists), encoding="utf-8", newline="\n")
-    print(f"{out}: {len(dists)} distributions", file=sys.stderr)
 
 
 # Third-party files that are never read at run time: C sources/headers shipped next
@@ -780,7 +630,7 @@ def write_zip(contents: BundleContents, out: Path, compress: bool) -> None:
     if len(contents.members) >= 0xFFFF:
         raise ToolError("too many members for a non-zip64 bundle")
     comment = (
-        f"pyembed-bundle/{FORMAT_VERSION} name={contents.name} "
+        f"sboa-bundle/{FORMAT_VERSION} name={contents.name} "
         f"magic={importlib.util.MAGIC_NUMBER.hex()}"
     ).encode("ascii")
     method = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
@@ -920,7 +770,7 @@ def emit_c(
         for line in asm_lines(target, symbol, incbin_path)
     )
     out.write_text(
-        f"""/* Generated by pyembed_bundle.py; do not edit.
+        f"""/* Generated by sboa_bundle.py; do not edit.
  *
  * Embeds bundle {name!r} ({incbin_path}: {size} bytes, sha256 {sha256})
  * in read-only data with the
@@ -930,7 +780,7 @@ def emit_c(
  * changes, so compiler caches (ccache keys on the preprocessed source, not on
  * .incbin inputs) cannot serve a stale object.  {symbol}_len is computed by the
  * assembler from the included bytes.  Exposes the bytes to C as {symbol}/{symbol}_len and to
- * OCaml as the primitive pyembed_incbin_{symbol} (a read-only external Bigarray;
+ * OCaml as the primitive sboa_incbin_{symbol} (a read-only external Bigarray;
  * see https://ocaml.org/manual/intfc.html#s:C-Bigarrays).  Writing to it faults.
  */
 #include <stddef.h>
@@ -945,8 +795,8 @@ extern const unsigned char {symbol}[];
 extern const size_t {symbol}_len;
 _Static_assert(sizeof(size_t) == 8, "{symbol}_len is emitted as .quad");
 
-value pyembed_incbin_{symbol}(value unit);
-value pyembed_incbin_{symbol}(value unit)
+value sboa_incbin_{symbol}(value unit);
+value sboa_incbin_{symbol}(value unit)
 {{
   (void)unit;
   return caml_ba_alloc_dims(CAML_BA_CHAR | CAML_BA_C_LAYOUT | CAML_BA_EXTERNAL, 1,
@@ -958,26 +808,26 @@ value pyembed_incbin_{symbol}(value unit)
 
 def emit_ml(out: Path, symbol: str, name: str, priority: int, mli: bool) -> None:
     out.write_text(
-        f"""(** Embedded Python bundle [{name}] (generated by pyembed_bundle.py; do not edit).
+        f"""(** Embedded Python bundle [{name}] (generated by sboa_bundle.py; do not edit).
 
-    Linking this module registers the bundle with [Pyembed] at priority {priority}
+    Linking this module registers the bundle with [Sboa] at priority {priority}
     (lower is searched first). The bytes live in the executable's read-only data
     (symbol [{symbol}], see [{symbol}_blob.c]). *)
 
 external incbin :
   unit -> (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
-  = "pyembed_incbin_{symbol}"
+  = "sboa_incbin_{symbol}"
 
-let bundle = Pyembed.Bundle.of_incbin ~symbol:"{symbol}" ~name:"{name}" (incbin ())
-let () = Pyembed.Bundle.register ~priority:{priority} bundle
+let bundle = Sboa.Bundle.of_incbin ~symbol:"{symbol}" ~name:"{name}" (incbin ())
+let () = Sboa.Bundle.register ~priority:{priority} bundle
 """
     )
     if mli:
         out.with_suffix(".mli").write_text(
-            f"""(** Embedded Python bundle [{name}] (generated by pyembed_bundle.py; do not edit).
-    Registered with [Pyembed.Bundle.register] when linked. *)
+            f"""(** Embedded Python bundle [{name}] (generated by sboa_bundle.py; do not edit).
+    Registered with [Sboa.Bundle.register] when linked. *)
 
-val bundle : Pyembed.Bundle.t
+val bundle : Sboa.Bundle.t
 (** The bundle [{name}], backed by the read-only symbol [{symbol}]. *)
 """
         )
@@ -1134,8 +984,6 @@ def cmd_bundle(args: argparse.Namespace) -> None:
             add_wheel(contents, w, exclude)
     for site in args.site:
         add_site(contents, site, exclude, exclude_dists)
-    if args.notices_out:
-        write_notices(contents, args.notices_out)
     finish_bundle(contents, args)
 
 
@@ -1151,9 +999,9 @@ def cmd_stdlib(args: argparse.Namespace) -> None:
     exclude = Globs(args.exclude)
     root = args.stdlib_dir
     if root is None:
-        if args.cpython_config is None:
-            raise ToolError("stdlib needs --stdlib-dir or --cpython-config")
-        root = Path(read_cpython_config(args.cpython_config)["stdlib_dir"])
+        if args.config is None:
+            raise ToolError("stdlib needs --stdlib-dir or --config")
+        root = Path(read_sboa_config(args.config)["stdlib_dir"])
     if not (root / "os.py").is_file():
         raise ToolError(f"{root}: not a stdlib directory (no os.py)")
     for rel, p in walk_tree(root):
@@ -1201,11 +1049,11 @@ def frozen_entries(args: argparse.Namespace) -> List[Tuple[str, bytes, bool]]:
     if args.stdlib_package:
         stdlib_dir = args.stdlib_dir
         if stdlib_dir is None:
-            if args.cpython_config is None:
+            if args.config is None:
                 raise ToolError(
-                    "--stdlib-package needs --stdlib-dir or --cpython-config"
+                    "--stdlib-package needs --stdlib-dir or --config"
                 )
-            stdlib_dir = Path(read_cpython_config(args.cpython_config)["stdlib_dir"])
+            stdlib_dir = Path(read_sboa_config(args.config)["stdlib_dir"])
         packages += [(n, stdlib_dir / n.replace(".", "/")) for n in args.stdlib_package]
     for name, path in packages:
         if not (path / "__init__.py").is_file():
@@ -1233,29 +1081,29 @@ def c_bytes(data: bytes) -> str:
 def cmd_freeze(args: argparse.Namespace) -> None:
     entries = frozen_entries(args)
     parts = [
-        f"""/* Generated by pyembed_bundle.py freeze; do not edit.
+        f"""/* Generated by sboa_bundle.py freeze; do not edit.
  *
  * PyImport_FrozenModules table for CPython {sys.version_info.major}.{sys.version_info.minor} (marshal format
  * {marshal.version}, bytecode magic {importlib.util.MAGIC_NUMBER.hex()}).  Layout follows
  * Include/cpython/import.h: struct _frozen {{ name; code; size; is_package; }} with
  * size > 0 and is_package a separate flag (3.11+; the old negative-size
  * convention is gone).  The host points PyImport_FrozenModules at
- * pyembed_frozen_table before Py_InitializeFromConfig; CPython consults this
+ * sboa_frozen_table before Py_InitializeFromConfig; CPython consults this
  * table after its bootstrap modules and before its own frozen stdlib.
  */
 #include <Python.h>
 
-const unsigned char pyembed_frozen_magic[4] = {{{",".join(str(b) for b in importlib.util.MAGIC_NUMBER)}}};
+const unsigned char sboa_frozen_magic[4] = {{{",".join(str(b) for b in importlib.util.MAGIC_NUMBER)}}};
 """
     ]
     for i, (name, code, _pkg) in enumerate(entries):
         parts.append(
-            f"/* {name} */\nstatic const unsigned char pyembed_frozen_{i}[] = {{\n{c_bytes(code)}\n}};\n"
+            f"/* {name} */\nstatic const unsigned char sboa_frozen_{i}[] = {{\n{c_bytes(code)}\n}};\n"
         )
-    parts.append("const struct _frozen pyembed_frozen_table[] = {")
+    parts.append("const struct _frozen sboa_frozen_table[] = {")
     for i, (name, _code, pkg) in enumerate(entries):
         parts.append(
-            f'  {{"{name}", pyembed_frozen_{i}, (int)sizeof(pyembed_frozen_{i}), {1 if pkg else 0}}},'
+            f'  {{"{name}", sboa_frozen_{i}, (int)sizeof(sboa_frozen_{i}), {1 if pkg else 0}}},'
         )
     parts.append("  {0, 0, 0, 0}\n};\n")
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -1474,7 +1322,7 @@ def cmd_check_seam(args: argparse.Namespace) -> int:
 # --- fetch-wheels -------------------------------------------------------------
 
 
-# cpython-embed platform names (cpython-embed.config ``platform``) ->
+# sboa platform names (sboa.config ``platform``) ->
 # (sys.platform, platform.system(), platform.machine()).
 TARGET_PLATFORMS: Dict[str, Tuple[str, str, str]] = {
     "linux-gnu-x86_64": ("linux", "Linux", "x86_64"),
@@ -1489,7 +1337,7 @@ TARGET_PLATFORMS: Dict[str, Tuple[str, str, str]] = {
 
 def target_marker_env(python_version: str, platform: str) -> Dict[str, str]:
     """PEP 508 marker variables of the *embedded* interpreter (CPython
-    ``python_version`` X.Y[.Z] on cpython-embed ``platform``), independent of the
+    ``python_version`` X.Y[.Z] on sboa ``platform``), independent of the
     interpreter running this tool."""
     if platform not in TARGET_PLATFORMS:
         raise UsageError(
@@ -1517,19 +1365,19 @@ def target_marker_env(python_version: str, platform: str) -> Dict[str, str]:
 
 def target_marker_env_from_args(args: argparse.Namespace) -> Dict[str, str]:
     """Marker environment from ``--python-version``/``--platform`` or else from the
-    global ``--cpython-config``; one of them is required."""
+    global ``--config``; one of them is required."""
     version, platform = args.python_version, args.platform
     if (version is None) != (platform is None):
         raise UsageError("--python-version and --platform go together")
     if version is None:
-        if args.cpython_config is None:
+        if args.config is None:
             raise UsageError(
                 "markers are evaluated for the embedded interpreter: pass "
-                "--cpython-config FILE, or --python-version and --platform"
+                "--config FILE, or --python-version and --platform"
             )
-        cfg = read_cpython_config(args.cpython_config)
+        cfg = read_sboa_config(args.config)
         if "version" not in cfg or "platform" not in cfg:
-            raise ToolError(f"{args.cpython_config}: no version/platform fields")
+            raise ToolError(f"{args.config}: no version/platform fields")
         version, platform = cfg["version"], cfg["platform"]
     return target_marker_env(version, platform)
 
@@ -1713,7 +1561,7 @@ def fetch_requirements(
 
 def cmd_fetch_wheels(args: argparse.Namespace) -> None:
     """Exit codes: 0 all wheels present and verified (stdout lists their file
-    names); 1 any error (``pyembed-bundle: error: ...`` on stderr): no pure wheel in
+    names); 1 any error (``sboa-bundle: error: ...`` on stderr): no pure wheel in
     the lock for a required distribution, requirement not in the lock, hash
     mismatch, missing file with ``--offline``, download failure, unparsable
     requirement or marker; 2 command-line usage error (argparse)."""
@@ -1779,12 +1627,12 @@ def add_target_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument(
         "--python-version",
-        help="embedded CPython version for markers (default: the --cpython-config's)",
+        help="embedded CPython version for markers (default: the --config's)",
     )
     p.add_argument(
         "--platform",
-        help="embedded cpython-embed platform for markers, e.g. linux-gnu-x86_64"
-        " (default: the --cpython-config's)",
+        help="embedded sboa platform for markers, e.g. linux-gnu-x86_64"
+        " (default: the --config's)",
     )
     p.add_argument(
         "--root",
@@ -1795,7 +1643,7 @@ def add_target_args(p: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="pyembed-bundle",
+        prog="sboa-bundle",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1803,9 +1651,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--python", help="interpreter to run under (re-executes the tool if different)"
     )
     ap.add_argument(
-        "--cpython-config",
+        "--config",
         type=Path,
-        help="cpython-embed.config: run under its python_exe (unless --python) and"
+        help="sboa.config: run under its python_exe (unless --python) and"
         " default stdlib --stdlib-dir to its stdlib_dir",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1861,14 +1709,6 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="distribution to leave out",
     )
-    b.add_argument(
-        "--notices-out",
-        type=Path,
-        metavar="FILE",
-        help="also write a human-readable licence notices file: one section per "
-        "bundled distribution (name, version, declared licence, homepage, and the "
-        "licence/notice files kept from its dist-info)",
-    )
     add_target_args(b)
     b.add_argument(
         "--allow-stdlib-shadow",
@@ -1882,7 +1722,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--stdlib-dir",
         type=Path,
-        help="stdlib directory (default: stdlib_dir from --cpython-config)",
+        help="stdlib directory (default: stdlib_dir from --config)",
     )
     s.add_argument("--name", default="stdlib")
     s.add_argument("--exclude", action="append", default=[], metavar="GLOB")
@@ -1956,8 +1796,8 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def read_cpython_config(path: Path) -> Dict[str, str]:
-    """Read the string fields of a ``cpython-embed.config`` s-expression.
+def read_sboa_config(path: Path) -> Dict[str, str]:
+    """Read the string fields of a ``sboa.config`` s-expression.
 
     Only ``(key "value")`` and ``(key atom)`` pairs are extracted; that covers
     ``stdlib_dir``, ``python_exe``, ``magic`` and friends.
@@ -1978,11 +1818,11 @@ def reexec_if_needed(argv: Sequence[str]) -> None:
     """Re-run under ``--python`` and/or with ``PYTHONHASHSEED=0`` (deterministic marshal)."""
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--python")
-    ap.add_argument("--cpython-config", type=Path)
+    ap.add_argument("--config", type=Path)
     known, _ = ap.parse_known_args(argv)
     target = known.python or sys.executable
-    if known.python is None and known.cpython_config is not None:
-        target = read_cpython_config(known.cpython_config)["python_exe"]
+    if known.python is None and known.config is not None:
+        target = read_sboa_config(known.config)["python_exe"]
     rest = list(argv)
     same = os.path.realpath(target) == os.path.realpath(sys.executable)
     if (
@@ -1991,11 +1831,11 @@ def reexec_if_needed(argv: Sequence[str]) -> None:
         and sys.flags.hash_randomization == 0
     ):
         return
-    if os.environ.get("_PYEMBED_BUNDLE_REEXEC") == "1":
+    if os.environ.get("_SBOA_BUNDLE_REEXEC") == "1":
         raise ToolError("re-execution did not take effect")
     env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
     env.update(
-        PYTHONHASHSEED="0", PYTHONDONTWRITEBYTECODE="1", _PYEMBED_BUNDLE_REEXEC="1"
+        PYTHONHASHSEED="0", PYTHONDONTWRITEBYTECODE="1", _SBOA_BUNDLE_REEXEC="1"
     )
     cmd = [target, "-s", "-P", os.path.abspath(__file__), *rest]
     sys.exit(subprocess.run(cmd, env=env).returncode)
@@ -2009,7 +1849,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         rc = args.func(args)
         return int(rc or 0)
     except ToolError as e:
-        print(f"pyembed-bundle: error: {e}", file=sys.stderr)
+        print(f"sboa-bundle: error: {e}", file=sys.stderr)
         return e.exit_code
 
 

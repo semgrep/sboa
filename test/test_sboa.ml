@@ -10,21 +10,21 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(* Tests for pyembed.cpython.
+(* Tests for sboa.cpython.
 
    One process initializes Python once (with Sys.catch_break set first so
    SIGINT/SIGTERM are routed) and runs every scenario in order; the exit test
-   runs in a child process because Pyembed.exit ends the process. A
+   runs in a child process because Sboa.exit ends the process. A
    micro-benchmark runs last and prints round-trip costs.
 
    The interpreter has no bundles here: extra_sys_path points at the stdlib
-   of the CPython the test is linked with (PYEMBED_STDLIB, set by dune). *)
+   of the CPython the test is linked with (SBOA_STDLIB, set by dune). *)
 
-open Pyembed
+open Sboa
 
 (* The stdlib directory of the CPython the test is linked with, from the
    dune rule (probe.sh --print-stdlib). *)
-let stdlib = Sys.getenv "PYEMBED_STDLIB"
+let stdlib = Sys.getenv "SBOA_STDLIB"
 
 let config () =
   {
@@ -39,7 +39,7 @@ let config () =
 exception My_error of int
 exception Mapped_error of string
 
-let m = "_pyembed_test"
+let m = "_sboa_test"
 let kept_counter : Counter.t option Atomic.t = Atomic.make None
 let int_ = Conv.int
 let ret_int gil i = Conv.to_py Conv.int gil i
@@ -188,15 +188,15 @@ let () =
       c.n <- 2 * c.n;
       Object.none)
 
-external test_bundle_blob : unit -> Bundle.data = "pyembed_test_bundle_blob"
+external test_bundle_blob : unit -> Bundle.data = "sboa_test_bundle_blob"
 
 let () =
   (* registered out of order: lower priority is searched first *)
   Bundle.register ~priority:90
-    (Bundle.of_incbin ~symbol:"pyembed_test_bundle" ~name:"later"
+    (Bundle.of_incbin ~symbol:"sboa_test_bundle" ~name:"later"
        (test_bundle_blob ()));
   Bundle.register ~priority:10
-    (Bundle.of_incbin ~symbol:"pyembed_test_bundle" ~name:"test"
+    (Bundle.of_incbin ~symbol:"sboa_test_bundle" ~name:"test"
        (test_bundle_blob ()))
 
 (* ------------------------------------------------------------------------ *)
@@ -283,17 +283,17 @@ let test_init () =
     (py_eval_bool "'site' not in __import__('sys').modules");
   Alcotest.(check bool)
     "builtin module" true
-    (py_eval_bool "'_pyembed_test' in __import__('sys').builtin_module_names");
+    (py_eval_bool "'_sboa_test' in __import__('sys').builtin_module_names");
   Alcotest.(check string)
     "text signature" "(a, b, /)"
     (py_eval_str
-       "str(__import__('inspect').signature(__import__('_pyembed_test').add))");
+       "str(__import__('inspect').signature(__import__('_sboa_test').add))");
   Alcotest.(check string)
     "doc" "Add two ints."
-    (py_eval_str "__import__('_pyembed_test').add.__doc__");
+    (py_eval_str "__import__('_sboa_test').add.__doc__");
   Alcotest.(check int)
     "call" 5
-    (py_eval_int "__import__('_pyembed_test').add(2, 3)");
+    (py_eval_int "__import__('_sboa_test').add(2, 3)");
   Alcotest.(check bool)
     "SIGPIPE ignored" true
     (py_eval_bool
@@ -479,7 +479,7 @@ let test_python_errors () =
 
 let test_ocaml_errors () =
   py_exec
-    "import _pyembed, _pyembed_test as t\n\
+    "import _sboa, _sboa_test as t\n\
      def catch(kind):\n\
     \    try:\n\
     \        t.fail(kind)\n\
@@ -502,7 +502,7 @@ let test_ocaml_errors () =
          Conv.of_py_exn Conv.string gil (eval gil "_r")));
   Alcotest.(check bool)
     "alias" true
-    (py_eval_bool "t.OCamlError is _pyembed.OCamlError");
+    (py_eval_bool "t.OCamlError is _sboa.OCamlError");
   (* exit crossing back into OCaml *)
   match py_exec "t.fail('exit')" with
   | () -> Alcotest.fail "no exception"
@@ -657,7 +657,7 @@ let test_off_main_thread () =
      th.start()\n\
      th.join()\n";
   check_contains "rejected"
-    ~sub:"RuntimeError: pyembed: OCaml functions may only be called"
+    ~sub:"RuntimeError: sboa: OCaml functions may only be called"
     (py_eval_str "result");
   (* and OCaml systhreads cannot use Python *)
   let r = ref "" in
@@ -758,7 +758,7 @@ let test_class_lifecycle () =
     "isinstance" true
     (py_eval_bool "isinstance(c, t.Counter)");
   Alcotest.(check string)
-    "type name" "_pyembed_test.Counter"
+    "type name" "_sboa_test.Counter"
     (py_eval_str "type(c).__module__ + '.' + type(c).__qualname__");
   Alcotest.(check bool)
     "no __dict__" true
@@ -808,29 +808,28 @@ let test_bundles () =
   Alcotest.(check (list string))
     "registered" [ "test"; "later" ]
     (List.map Bundle.name (Bundle.registered ()));
-  py_exec "import _pyembed\nb = _pyembed.bundles()";
+  py_exec "import _sboa\nb = _sboa.bundles()";
   Alcotest.(check string)
     "bundles()"
-    "[('test', b'pyembed test bundle payload\\n'), ('later', b'pyembed test \
-     bundle payload\\n')]"
+    "[('test', b'sboa test bundle payload\\n'), ('later', b'sboa test bundle \
+     payload\\n')]"
     (py_eval_str "repr([(n, bytes(m)) for n, m in b])");
   Alcotest.(check bool) "read-only" true (py_eval_bool "b[0][1].readonly");
   (* default <exe dir>/libs/python3.X/lib-dynload does not exist in _build *)
   Alcotest.(check bool)
     "libdynload_dir missing -> None" true
-    (py_eval_bool "_pyembed.libdynload_dir() is None");
+    (py_eval_bool "_sboa.libdynload_dir() is None");
   Alcotest.(check string)
     "dev_overrides" "[]"
-    (py_eval_str "repr(_pyembed.dev_overrides())")
+    (py_eval_str "repr(_sboa.dev_overrides())")
 
 let test_frozen () =
   Alcotest.(check string)
     "frozen module" "from the frozen table"
-    (py_eval_str "__import__('_pyembed_frozen_probe').VALUE");
+    (py_eval_str "__import__('_sboa_frozen_probe').VALUE");
   Alcotest.(check bool)
     "loaded by FrozenImporter" true
-    (py_eval_bool
-       "__import__('_pyembed_frozen_probe').__spec__.origin == 'frozen'")
+    (py_eval_bool "__import__('_sboa_frozen_probe').__spec__.origin == 'frozen'")
 
 let test_misc () =
   with_gil (fun gil ->
@@ -1130,7 +1129,7 @@ let bench () =
     (fst (Atomic.get signal_ordering));
   Printf.printf
     "\n\
-     pyembed micro-benchmark (ns per operation, %d iterations):\n\
+     sboa micro-benchmark (ns per operation, %d iterations):\n\
     \  with_gil (empty scope)                               %8.1f\n\
     \  OCaml->Python call, identity fn, inside one with_gil %8.1f\n\
     \    same with ~keep_domain_lock:true                   %8.1f\n\
@@ -1146,8 +1145,8 @@ let bench () =
    refuses Unix.fork (test_fork_child). *)
 let test_counter () =
   py_exec
-    "import threading, time, gc, _pyembed\n\
-     c = _pyembed.Counter()\n\
+    "import threading, time, gc, _sboa\n\
+     c = _sboa.Counter()\n\
      r0 = repr(c)\n\
      seen = []\n\
      stop = False\n\
@@ -1162,7 +1161,7 @@ let test_counter () =
      th.join()\n\
      mid = len([v for v in seen if 0 < v < 300])\n\
      try:\n\
-    \    _pyembed.Counter(1)\n\
+    \    _sboa.Counter(1)\n\
     \    noargs = 'accepted'\n\
      except TypeError as e:\n\
     \    noargs = str(e)\n\
@@ -1176,7 +1175,7 @@ let test_counter () =
     \    readonly = 'accepted'\n\
      except AttributeError:\n\
     \    readonly = 'read-only'\n\
-     k = _pyembed.Counter()\n\
+     k = _sboa.Counter()\n\
      t.keep_counter(k)\n\
      kid = id(k)\n\
      del k\n\
@@ -1205,7 +1204,7 @@ let test_counter () =
     (py_eval_str "t.Counter.__doc__");
   Alcotest.(check bool)
     "same type elsewhere" true
-    (py_eval_bool "type(c).__module__ == '_pyembed'")
+    (py_eval_bool "type(c).__module__ == '_sboa'")
 
 (* ------------------------------------------------------------------------ *)
 
@@ -1213,9 +1212,9 @@ let () =
   Sys.catch_break true;
   Sys.set_signal Sys.sigterm (Sys.Signal_handle (fun _ -> raise Sys.Break));
   init (config ());
-  py_exec "import _pyembed_test as t";
+  py_exec "import _sboa_test as t";
   let tc name f = Alcotest.test_case name `Quick f in
-  Alcotest.run ~and_exit:false "pyembed"
+  Alcotest.run ~and_exit:false "sboa"
     [
       ( "lifecycle",
         [

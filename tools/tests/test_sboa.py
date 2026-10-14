@@ -10,7 +10,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
 # LICENSE for more details.
 #
-"""Tests for ``pyembed_bundle.py`` and ``_pyembed_importer`` on a sample tree.
+"""Tests for ``sboa_bundle.py`` and ``_sboa_importer`` on a sample tree.
 
 The sample covers: a package with subpackages, module docstrings, data files
 (inside and outside packages), a pure wheel with ``*.dist-info`` (metadata and
@@ -33,6 +33,7 @@ from typing import Tuple
 import pytest
 from conftest import IMPORTER
 from conftest import make_wheel
+from conftest import needs_builtin_extensions
 from conftest import run_isolated
 from conftest import run_tool
 from conftest import STDLIB_DIR
@@ -78,8 +79,8 @@ WHEEL_FILES = {
 STUB_EXT_C = r"""
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-static struct PyModuleDef def = {PyModuleDef_HEAD_INIT, "_pyembed_stubext", NULL, 0, NULL};
-PyMODINIT_FUNC PyInit__pyembed_stubext(void) {
+static struct PyModuleDef def = {PyModuleDef_HEAD_INIT, "_sboa_stubext", NULL, 0, NULL};
+PyMODINIT_FUNC PyInit__sboa_stubext(void) {
   PyObject *m = PyModule_Create(&def);
   if (m != NULL && PyModule_AddIntConstant(m, "ANSWER", 42) < 0) { Py_DECREF(m); return NULL; }
   return m;
@@ -146,7 +147,7 @@ def sample(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Path]:
             str(c),
             "-o",
             str(
-                dynload / ("_pyembed_stubext" + sysconfig.get_config_var("EXT_SUFFIX"))
+                dynload / ("_sboa_stubext" + sysconfig.get_config_var("EXT_SUFFIX"))
             ),
         ],
         check=True,
@@ -197,7 +198,7 @@ def test_bundle_layout_and_determinism(sample: Dict[str, Path], tmp_path: Path) 
         assert not any(n.endswith(".py") for n in names)
         pyc = zf.read("samplepkg/sub/mod.pyc")
         assert int.from_bytes(pyc[4:8], "little") == 0b01  # unchecked hash
-        assert zf.comment.startswith(b"pyembed-bundle/1 name=sample magic=")
+        assert zf.comment.startswith(b"sboa-bundle/1 name=sample magic=")
     # Rebuilding gives identical bytes.
     run_tool(
         "bundle",
@@ -227,13 +228,13 @@ def test_generated_sources(sample: Dict[str, Path]) -> None:
     out = sample["out"]
     ml = (out / "sample_bundle.ml").read_text()
     assert (
-        'Pyembed.Bundle.of_incbin ~symbol:"sample_bundle" ~name:"sample" (incbin ())'
+        'Sboa.Bundle.of_incbin ~symbol:"sample_bundle" ~name:"sample" (incbin ())'
         in ml
     )
-    assert "Pyembed.Bundle.register ~priority:50 bundle" in ml
-    assert '= "pyembed_incbin_sample_bundle"' in ml
+    assert "Sboa.Bundle.register ~priority:50 bundle" in ml
+    assert '= "sboa_incbin_sample_bundle"' in ml
     assert (out / "sample_bundle.mli").read_text().count(
-        "val bundle : Pyembed.Bundle.t"
+        "val bundle : Sboa.Bundle.t"
     ) == 1
     c = (out / "sample_bundle_blob.c").read_text()
     assert '.incbin \\"sample_bundle.zip\\"' in c and ".section .rodata" in c
@@ -324,7 +325,7 @@ def test_elf_blob_compiles(sample: Dict[str, Path], tmp_path: Path) -> None:
     assert (
         " R sample_bundle\n" in nm
         and " R sample_bundle_len\n" in nm
-        and " T pyembed_incbin_sample_bundle\n" in nm
+        and " T sboa_incbin_sample_bundle\n" in nm
     )
     size = subprocess.run(
         ["size", "-A", str(obj)], capture_output=True, text=True
@@ -335,6 +336,7 @@ def test_elf_blob_compiles(sample: Dict[str, Path], tmp_path: Path) -> None:
     )
 
 
+@needs_builtin_extensions
 def test_imports_resources_metadata(sample: Dict[str, Path], stdlib_zip: Path) -> None:
     r = run_isolated(
         """
@@ -348,9 +350,9 @@ def test_imports_resources_metadata(sample: Dict[str, Path], stdlib_zip: Path) -
         RESULT["csv_origin"] = csv.__spec__.origin
         RESULT["is_pkg"] = [samplepkg.__spec__.loader.is_package("samplepkg"), mod.__loader__.is_package("samplepkg.sub.mod")]
         RESULT["source"] = mod.__loader__.get_source("samplepkg.sub.mod")
-        RESULT["get_data"] = mod.__loader__.get_data("<pyembed:sample>/samplepkg/data/info.txt").decode()
+        RESULT["get_data"] = mod.__loader__.get_data("<sboa:sample>/samplepkg/data/info.txt").decode()
         try:
-            mod.__loader__.get_data("<pyembed:sample>/samplepkg/missing.txt")
+            mod.__loader__.get_data("<sboa:sample>/samplepkg/missing.txt")
         except FileNotFoundError as e:
             RESULT["get_data_missing"] = type(e).__name__
 
@@ -385,12 +387,12 @@ def test_imports_resources_metadata(sample: Dict[str, Path], stdlib_zip: Path) -
         """,
         bundles(sample, stdlib_zip),
     )
-    assert r["file"] == "<pyembed:sample>/samplepkg/__init__.py"
-    assert r["path"] == ["<pyembed:sample>/samplepkg"]
-    assert r["mod_file"] == "<pyembed:sample>/samplepkg/sub/mod.py"
+    assert r["file"] == "<sboa:sample>/samplepkg/__init__.py"
+    assert r["path"] == ["<sboa:sample>/samplepkg"]
+    assert r["mod_file"] == "<sboa:sample>/samplepkg/sub/mod.py"
     assert r["doc"] == "Sample package docstring (kept at optimization 0)."
     assert r["json"] == {"a": 1}
-    assert r["csv_origin"] == "<pyembed:stdlib>/csv.py"
+    assert r["csv_origin"] == "<sboa:stdlib>/csv.py"
     assert r["is_pkg"] == [True, False]
     assert r["source"] is None
     assert r["get_data"] == "hello resource\n"
@@ -407,19 +409,19 @@ def test_imports_resources_metadata(sample: Dict[str, Path], stdlib_zip: Path) -
     assert r["missing_dist"] is True
     assert r["wheel_version_at_import"] == "1.2.3"
     assert r["pem"].startswith("-----BEGIN CERT")
-    assert r["ns"] == ["a", "b", ["<pyembed:deps>/nsroot", "<pyembed:ns>/nsroot"]]
-    assert r["tomllib_file"] == "<pyembed:stdlib>/tomllib/__init__.py"
+    assert r["ns"] == ["a", "b", ["<sboa:deps>/nsroot", "<sboa:ns>/nsroot"]]
+    assert r["tomllib_file"] == "<sboa:stdlib>/tomllib/__init__.py"
 
 
 def test_extension_module(sample: Dict[str, Path], stdlib_zip: Path) -> None:
     r = run_isolated(
         """
-        import _pyembed_stubext
-        RESULT["answer"] = _pyembed_stubext.ANSWER
-        RESULT["file"] = _pyembed_stubext.__file__
-        RESULT["loader"] = type(_pyembed_stubext.__loader__).__name__
+        import _sboa_stubext
+        RESULT["answer"] = _sboa_stubext.ANSWER
+        RESULT["file"] = _sboa_stubext.__file__
+        RESULT["loader"] = type(_sboa_stubext.__loader__).__name__
         try:
-            import _pyembed_no_such_ext
+            import _sboa_no_such_ext
         except ModuleNotFoundError:
             RESULT["missing"] = True
         """,
@@ -434,6 +436,7 @@ def test_extension_module(sample: Dict[str, Path], stdlib_zip: Path) -> None:
     assert r["missing"] is True
 
 
+@needs_builtin_extensions
 def test_dev_override(sample: Dict[str, Path], stdlib_zip: Path) -> None:
     r = run_isolated(
         """
@@ -449,7 +452,7 @@ def test_dev_override(sample: Dict[str, Path], stdlib_zip: Path) -> None:
     )
     assert r["value"] == 2 and r["sub"] == "dev"
     assert r["file"] == str(sample["dev"] / "samplepkg" / "__init__.py")
-    assert r["wheel"] == "<pyembed:deps>/samplewheel/__init__.py"
+    assert r["wheel"] == "<sboa:deps>/samplewheel/__init__.py"
     # A bare directory in an override does not shadow the bundled package.
     r = run_isolated(
         "import samplepkg\nRESULT['value'] = samplepkg.VALUE\n",
@@ -459,6 +462,7 @@ def test_dev_override(sample: Dict[str, Path], stdlib_zip: Path) -> None:
     assert r["value"] == 1
 
 
+@needs_builtin_extensions
 def test_traceback(sample: Dict[str, Path], stdlib_zip: Path) -> None:
     r = run_isolated(
         """
@@ -475,7 +479,7 @@ def test_traceback(sample: Dict[str, Path], stdlib_zip: Path) -> None:
         """,
         bundles(sample, stdlib_zip),
     )
-    assert 'File "<pyembed:sample>/samplepkg/sub/mod.py", line 6, in boom' in r["tb"]
+    assert 'File "<sboa:sample>/samplepkg/sub/mod.py", line 6, in boom' in r["tb"]
     assert "ValueError: boom from bundle" in r["tb"]
     assert r["getsource"] == "OSError"
 
@@ -487,11 +491,11 @@ def test_magic_mismatch(sample: Dict[str, Path], tmp_path: Path) -> None:
     ) as dst:
         for i in src.infolist():
             dst.writestr(i, src.read(i))
-        dst.comment = b"pyembed-bundle/1 name=sample magic=00000000"
+        dst.comment = b"sboa-bundle/1 name=sample magic=00000000"
     script = f"""
 import sys
-_m = type(sys)("_pyembed_importer")
-exec(compile(open({str(IMPORTER)!r}, "rb").read(), "<frozen _pyembed_importer>", "exec"), _m.__dict__)
+_m = type(sys)("_sboa_importer")
+exec(compile(open({str(IMPORTER)!r}, "rb").read(), "<frozen _sboa_importer>", "exec"), _m.__dict__)
 try:
     _m.install([("bad", open({str(bad)!r}, "rb").read())])
 except _m.BundleError as e:
@@ -617,7 +621,7 @@ wheels = [
 def test_marker_evaluation() -> None:
     sys.path.insert(0, str(TOOL.parent))
     try:
-        import pyembed_bundle as pb
+        import sboa_bundle as pb
     finally:
         sys.path.pop(0)
     env = pb.target_marker_env("3.13.16", "linux-gnu-x86_64")
@@ -646,15 +650,15 @@ def test_freeze_table(tmp_path: Path) -> None:
     run_tool(
         "freeze",
         "--module",
-        f"_pyembed_importer={IMPORTER}",
+        f"_sboa_importer={IMPORTER}",
         "--package",
         f"encodings={STDLIB_DIR / 'encodings'}",
         "--out",
         str(out),
     )
     c = out.read_text()
-    assert "const struct _frozen pyembed_frozen_table[] = {" in c
-    assert '{"_pyembed_importer", pyembed_frozen_' in c
+    assert "const struct _frozen sboa_frozen_table[] = {" in c
+    assert '{"_sboa_importer", sboa_frozen_' in c
     assert '{"encodings", ' in c and ", 1}," in c  # is_package flag
     assert '{"encodings.utf_8", ' in c
     assert c.rstrip().endswith("{0, 0, 0, 0}\n};") or "{0, 0, 0, 0}" in c
@@ -663,10 +667,10 @@ def test_freeze_table(tmp_path: Path) -> None:
 EMBED_MAIN_C = r"""
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-extern const struct _frozen pyembed_frozen_table[];
+extern const struct _frozen sboa_frozen_table[];
 int main(int argc, char **argv) {
   if (argc < 2) return 2;
-  PyImport_FrozenModules = pyembed_frozen_table;
+  PyImport_FrozenModules = sboa_frozen_table;
   PyConfig config;
   PyConfig_InitIsolatedConfig(&config);
   config.module_search_paths_set = 1; /* empty sys.path */
@@ -685,6 +689,7 @@ int main(int argc, char **argv) {
 """
 
 
+@needs_builtin_extensions
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="needs gcc")
 def test_frozen_table_in_embedded_interpreter(tmp_path: Path, stdlib_zip: Path) -> None:
     """Link the frozen table into a real embedding host: start-up with empty sys.path
@@ -693,7 +698,7 @@ def test_frozen_table_in_embedded_interpreter(tmp_path: Path, stdlib_zip: Path) 
     run_tool(
         "freeze",
         "--module",
-        f"_pyembed_importer={IMPORTER}",
+        f"_sboa_importer={IMPORTER}",
         "--package",
         f"encodings={STDLIB_DIR / 'encodings'}",
         "--out",
@@ -721,12 +726,12 @@ def test_frozen_table_in_embedded_interpreter(tmp_path: Path, stdlib_zip: Path) 
         check=True,
     )
     script = f"""
-import sys, _pyembed_importer
+import sys, _sboa_importer
 print("SYSPATH", sys.path)
-print("IMPORTER_FILE", getattr(_pyembed_importer, "__file__", None), _pyembed_importer.__spec__.origin)
+print("IMPORTER_FILE", getattr(_sboa_importer, "__file__", None), _sboa_importer.__spec__.origin)
 before = sorted(sys.modules)
 with open({str(stdlib_zip)!r}, "rb") as f:
-    _pyembed_importer.install([("stdlib", memoryview(f.read()))], None, [])
+    _sboa_importer.install([("stdlib", memoryview(f.read()))], None, [])
 import json, zipfile, importlib.metadata, importlib.resources, email.parser, encodings.cp1252
 print("BEFORE", " ".join(before))
 print("OK", json.__file__, encodings.cp1252.__spec__.origin)
@@ -735,7 +740,7 @@ print("OK", json.__file__, encodings.cp1252.__spec__.origin)
         [str(exe), script], capture_output=True, text=True, env={"LC_ALL": "C.UTF-8"}
     )
     assert r.returncode == 0, r.stderr
-    assert "OK <pyembed:stdlib>/json/__init__.py frozen" in r.stdout, r.stdout
+    assert "OK <sboa:stdlib>/json/__init__.py frozen" in r.stdout, r.stdout
     before = r.stdout.split("BEFORE ", 1)[1].split("\n", 1)[0].split()
     # The importer's own import chain needs nothing outside builtins and frozen modules.
     assert "importlib" not in before and "zipfile" not in before, before
@@ -869,7 +874,8 @@ def test_check_seam_via_reexport(tmp_path: Path) -> None:
     assert ok.returncode == 0, ok.stdout + ok.stderr
 
 
-@pytest.mark.parametrize("libdynload", [None, "/nonexistent/pyembed/lib-dynload"])
+@needs_builtin_extensions
+@pytest.mark.parametrize("libdynload", [None, "/nonexistent/sboa/lib-dynload"])
 def test_no_libdynload(
     sample: Dict[str, Path], stdlib_zip: Path, libdynload: Any
 ) -> None:
@@ -879,15 +885,15 @@ def test_no_libdynload(
         import samplepkg, csv
         RESULT["ok"] = (samplepkg.VALUE, csv.__spec__.origin)
         try:
-            import _pyembed_stubext
+            import _sboa_stubext
         except ModuleNotFoundError as e:
             RESULT["missing"] = e.name
         """,
         bundles(sample, stdlib_zip),
         libdynload=libdynload,
     )
-    assert r["ok"] == [1, "<pyembed:stdlib>/csv.py"]
-    assert r["missing"] == "_pyembed_stubext"
+    assert r["ok"] == [1, "<sboa:stdlib>/csv.py"]
+    assert r["missing"] == "_sboa_stubext"
 
 
 def _lock_for(wheels: Dict[str, Path], path: Path) -> None:
@@ -1033,16 +1039,16 @@ def test_fetch_wheels_lock_closure(tmp_path: Path) -> None:
     )
 
 
-def test_cpython_config_and_target_system(tmp_path: Path) -> None:
-    """``--cpython-config`` supplies the interpreter and stdlib dir (the dune rule's
+def test_config_and_target_system(tmp_path: Path) -> None:
+    """``--config`` supplies the interpreter and stdlib dir (the dune rule's
     only input); ``--target-system`` maps dune's %{system}."""
-    cfg = tmp_path / "cpython-embed.config"
+    cfg = tmp_path / "sboa.config"
     cfg.write_text(
         f'((version "3.13")\n (magic 3571)\n (stdlib_dir "{STDLIB_DIR}")\n'
         f' (python_exe "{sys.executable}")\n (runtime_files (("a" "b"))))\n'
     )
     run_tool(
-        "--cpython-config",
+        "--config",
         str(cfg),
         "embed",
         "--zip",
@@ -1057,11 +1063,11 @@ def test_cpython_config_and_target_system(tmp_path: Path) -> None:
     assert "__TEXT,__const" in (tmp_path / "m" / "t_bundle_blob.c").read_text()
     frozen = tmp_path / "frozen.c"
     run_tool(
-        "--cpython-config",
+        "--config",
         str(cfg),
         "freeze",
         "--module",
-        f"_pyembed_importer={IMPORTER}",
+        f"_sboa_importer={IMPORTER}",
         "--stdlib-package",
         "encodings",
         "--out",
@@ -1095,12 +1101,13 @@ def test_cpython_config_and_target_system(tmp_path: Path) -> None:
 def _tool_module() -> Any:
     sys.path.insert(0, str(TOOL.parent))
     try:
-        import pyembed_bundle as pb
+        import sboa_bundle as pb
     finally:
         sys.path.pop(0)
     return pb
 
 
+@needs_builtin_extensions
 def test_namespace_package_resources(sample: Dict[str, Path], stdlib_zip: Path) -> None:
     """Item 11: importlib.resources.files() on a namespace package spanning bundles."""
     r = run_isolated(
@@ -1119,10 +1126,11 @@ def test_namespace_package_resources(sample: Dict[str, Path], stdlib_zip: Path) 
     assert r["names"] == ["ns_data.txt", "part_a", "part_b"]
     assert r["data"] == "ns data\n"
     assert r["loader"] == "_NamespaceLoader"
-    assert r["path"] == ["<pyembed:deps>/nsroot", "<pyembed:ns>/nsroot"]
+    assert r["path"] == ["<sboa:deps>/nsroot", "<sboa:ns>/nsroot"]
     assert r["sub"] == "b"
 
 
+@needs_builtin_extensions
 def test_stdlib_dir_package_submodules_from_bundle(
     sample: Dict[str, Path], stdlib_zip: Path
 ) -> None:
@@ -1139,14 +1147,15 @@ def test_stdlib_dir_package_submodules_from_bundle(
         bundles(sample, stdlib_zip),
     )
     assert r["parent_path"][0].startswith(r["stdlib_dir"])
-    assert r["origin"] == "<pyembed:stdlib>/encodings/cp1250.py"
+    assert r["origin"] == "<sboa:stdlib>/encodings/cp1250.py"
 
 
 def _install_error(data: bytes, name: str = "b") -> str:
     script = f"""
 import sys
-_m = type(sys)("_pyembed_importer")
-exec(compile(open({str(IMPORTER)!r}, "rb").read(), "<frozen _pyembed_importer>", "exec"), _m.__dict__)
+_m = type(sys)("_sboa_importer")
+exec(compile(open({str(IMPORTER)!r}, "rb").read(), "<frozen _sboa_importer>", "exec"), _m.__dict__)
+import zlib  # builtin or not, as in conftest.PRELUDE
 sys.path[:] = []
 try:
     f = _m.install([({name!r}, {data!r})])
@@ -1193,7 +1202,7 @@ def test_corrupt_bundles(tmp_path: Path) -> None:
     bad_magic = good.replace(b"magic=", b"magic=zz")[: len(good) + 2]
     out = _install_error(bad_magic)
     assert "BundleError" in out
-    # Bundle names are restricted (they end up in <pyembed:NAME> paths).
+    # Bundle names are restricted (they end up in <sboa:NAME> paths).
     assert "invalid bundle name 'a b>'" in _install_error(good, name="a b>")
     r = run_tool("bundle", "--name", 'x"y', "--out", str(tmp_path / "o2"), check=False)
     assert r.returncode == 2 and "invalid bundle name" in r.stderr
@@ -1248,17 +1257,17 @@ def test_fetch_wheels_markers_follow_embedded_target(tmp_path: Path) -> None:
     assert fetched(
         "--python-version", "3.13.16", "--platform", "windows-x86_64"
     ) == sorted([whl["core"].name, whl["winonly"].name])
-    cfg = tmp_path / "cpython-embed.config"
+    cfg = tmp_path / "sboa.config"
     cfg.write_text(
         f'((version "3.11.2")\n (platform "windows-x86_64")\n (stdlib_dir "{STDLIB_DIR}")\n'
         f' (python_exe "{sys.executable}"))\n'
     )
-    r = run_tool("--cpython-config", str(cfg), *base, check=False)
+    r = run_tool("--config", str(cfg), *base, check=False)
     assert r.returncode == 0, r.stderr
     assert sorted(r.stdout.split()) == sorted(w.name for w in whl.values())
     # Neither the config nor an explicit target: usage error (exit 2).
     r = run_tool(*base, check=False)
-    assert r.returncode == 2 and "--cpython-config" in r.stderr
+    assert r.returncode == 2 and "--config" in r.stderr
     r = run_tool(
         *base, "--python-version", "3.13", "--platform", "solaris-sparc", check=False
     )
@@ -1546,103 +1555,3 @@ def test_stdlib_shadow_refused(tmp_path: Path) -> None:
     std = parser.parse_args(["stdlib", "--out", "x"])
     bun = parser.parse_args(["bundle", "--name", "n", "--out", "x"])
     assert std.priority < bun.priority
-
-
-def test_licence_notices(tmp_path: Path) -> None:
-    """The licence, NOTICE and authors files of each wheel stay in the bundle
-    (also under dist-info/licenses/), and --notices-out writes one section per
-    distribution with the declared licence, the homepage and the texts."""
-    wheels = tmp_path / "w"
-    make_wheel(
-        wheels,
-        "alpha-1.2-py3-none-any.whl",
-        {
-            "alpha/__init__.py": "",
-            "alpha-1.2.dist-info/METADATA": """\
-                Metadata-Version: 2.4
-                Name: alpha
-                Version: 1.2
-                License-Expression: Apache-2.0
-                Project-URL: Homepage, https://example.org/alpha
-                """,
-            "alpha-1.2.dist-info/licenses/LICENSE": "Apache licence text\n",
-            "alpha-1.2.dist-info/licenses/NOTICE": "Alpha NOTICE text\n",
-            "alpha-1.2.dist-info/LICENCE.txt": "British spelling\n",
-            "alpha-1.2.dist-info/AUTHORS": "A. Author\n",
-            "alpha-1.2.dist-info/RECORD": "alpha/__init__.py,,\n",
-        },
-    )
-    make_wheel(
-        wheels,
-        "Cert_Pkg-3.0-py3-none-any.whl",
-        {
-            "cert_pkg/__init__.py": "",
-            "Cert_Pkg-3.0.dist-info/METADATA": """\
-                Metadata-Version: 2.1
-                Name: cert-pkg
-                Version: 3.0
-                Home-page: https://example.org/cert
-                License: MPL-2.0
-                """,
-            "Cert_Pkg-3.0.dist-info/LICENSE": "MPL text\n",
-        },
-    )
-    make_wheel(
-        wheels,
-        "bare-0.1-py3-none-any.whl",
-        {
-            "bare/__init__.py": "",
-            "bare-0.1.dist-info/METADATA": """\
-                Metadata-Version: 2.1
-                Name: bare
-                Version: 0.1
-                License: UNKNOWN
-                Classifier: License :: OSI Approved :: BSD License
-                """,
-        },
-    )
-    out = tmp_path / "o"
-    notices = tmp_path / "n" / "NOTICES.txt"
-    args = [
-        "bundle",
-        "--name",
-        "w",
-        "--wheels",
-        str(wheels),
-        "--out",
-        str(out),
-        "--zip-only",
-        "--notices-out",
-        str(notices),
-    ]
-    run_tool(*args)
-    with zipfile.ZipFile(out / "w_bundle.zip") as zf:
-        names = set(zf.namelist())
-    for kept in (
-        "alpha-1.2.dist-info/licenses/LICENSE",
-        "alpha-1.2.dist-info/licenses/NOTICE",
-        "alpha-1.2.dist-info/LICENCE.txt",
-        "alpha-1.2.dist-info/AUTHORS",
-        "alpha-1.2.dist-info/METADATA",
-    ):
-        assert kept in names, kept
-    assert "alpha-1.2.dist-info/RECORD" not in names
-    text = notices.read_text()
-    # sorted by name, one section each
-    assert text.index("\nalpha 1.2\n") < text.index("\nbare 0.1\n")
-    assert text.index("\nbare 0.1\n") < text.index("\ncert-pkg 3.0\n")
-    assert "Declared licence: Apache-2.0" in text
-    assert "Homepage: https://example.org/alpha" in text
-    assert "Apache licence text" in text and "Alpha NOTICE text" in text
-    assert "British spelling" in text and "A. Author" in text
-    # MPL: the source-availability sentence and the home page
-    assert "Declared licence: MPL-2.0" in text
-    assert "Mozilla Public License 2.0" in text and "https://example.org/cert" in text
-    assert "MPL text" in text
-    # classifier fallback; no files shipped
-    assert "Declared licence: BSD License" in text
-    assert "No licence or notice file is shipped" in text
-    # deterministic
-    first = text
-    run_tool(*args)
-    assert notices.read_text() == first

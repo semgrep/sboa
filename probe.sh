@@ -8,16 +8,18 @@
 #   probe.sh --print-python          print the matching interpreter (build time)
 #   probe.sh --exec-python ARGS...   run that interpreter (build-time tools in
 #                                    dune rules; no other Python is needed);
-#                                    $PYEMBED_PYTHON overrides it
+#                                    $SBOA_PYTHON overrides it
 #
-# Source: $PYEMBED_CONFIG, or toolchain/cpython-embed.config next to this
-# script (in dune's build directory: the file the toolchain rule generates,
-# in both of its modes; rules calling probe.sh must depend on it): a sexp
-# with at least the fields (incdir ..) (libdir ..) and either (lib_file ..)
-# (the shared library or import library, linked by full path; preferred) or
-# (lib_name ..) (linked as -l<lib_name>); optionally (stdlib_dir ..).
-# PYEMBED_PREFIX is not read here: it is an input of toolchain/fetch.sh,
-# which writes the config from that prefix's interpreter.
+# Source: $SBOA_CONFIG, else sboa.config next to this script (the installed
+# layout: lib/sboa/ holds probe.sh, sboa.config, sboa_bundle.py), else
+# toolchain/sboa.config below it (sboa's own build directory; rules calling
+# probe.sh must depend on that file). The config is a sexp with at least the
+# fields (incdir ..) (libdir ..) and either (lib_file ..) (the shared library
+# or import library, linked by full path; preferred) or (lib_name ..) (linked
+# as -l<lib_name>); optionally (stdlib_dir ..) and (python_exe ..).
+# SBOA_PREFIX is not read here: it is an input of toolchain/find_python.sh,
+# which writes the config (SBOA_PYTHON is too, and here it only overrides
+# the interpreter of --exec-python).
 #
 # Executables get two rpaths at link time: $ORIGIN/libs (Linux) or
 # @loader_path/libs (macOS), where the runtime library ships next to the
@@ -33,9 +35,16 @@ sexp_field() {
 }
 
 incdir=""; libdir=""; lib_name=""; lib_file=""; stdlib_dir=""; python_exe=""
-config=${PYEMBED_CONFIG:-$(dirname "$0")/toolchain/cpython-embed.config}
+here=$(dirname "$0")
+if [ -n "${SBOA_CONFIG:-}" ]; then
+  config=$SBOA_CONFIG
+elif [ -f "$here/sboa.config" ]; then
+  config=$here/sboa.config
+else
+  config=$here/toolchain/sboa.config
+fi
 [ -f "$config" ] ||
-  die "no $config: build toolchain/cpython-embed.config first, or set PYEMBED_CONFIG"
+  die "no $config: build toolchain/sboa.config first, or set SBOA_CONFIG"
 # Windows paths may contain backslashes, which are escape characters in
 # dune sexps; gcc/mingw and CPython accept forward slashes, so normalise.
 # (Quoted sexp atoms escape a backslash as two: decode that first.)
@@ -58,7 +67,7 @@ case "${1:-}" in
   --print-python) echo "$python_exe"; exit 0 ;;
   --exec-python)
     shift
-    python_exe=${PYEMBED_PYTHON:-$python_exe}
+    python_exe=${SBOA_PYTHON:-$python_exe}
     [ -n "$python_exe" ] || die "no python_exe in the config"
     # -B: never write __pycache__ into the toolchain tree (a dune
     # directory target: a modified target makes dune re-run its rule).
@@ -86,9 +95,9 @@ fi
 [ -z "$rpath" ] || link="$link \"$rpath\""
 # The absolute libdir rpath lets _build binaries (tests) and ldd find the
 # library; it is searched after libs/. Release builds that must not carry a
-# build-machine path set PYEMBED_NO_LIBDIR_RPATH=1 (or strip it when
+# build-machine path set SBOA_NO_LIBDIR_RPATH=1 (or strip it when
 # bundling).
-if [ -n "$rpath" ] && [ -z "${PYEMBED_NO_LIBDIR_RPATH:-}" ]; then
+if [ -n "$rpath" ] && [ -z "${SBOA_NO_LIBDIR_RPATH:-}" ]; then
   link="$link \"-Wl,-rpath,$libdir\""
 fi
 printf '(%s)\n' "$link" > "$2"
