@@ -71,6 +71,8 @@ jobs:
       - name: Install dependencies
         run: opam install . --deps-only --with-test --yes
       - name: Build and test
+        # bash: in PowerShell (the Windows default) `@install` is splatting
+        shell: bash
         run: opam exec -- dune build @install @runtest
       # The full bundle-tool suite needs a CPython with the stdlib extension
       # modules built in (python-build-standalone, which uv installs).
