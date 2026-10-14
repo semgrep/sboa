@@ -54,6 +54,8 @@ Summary
   ncurses (_curses, readline, Linux and macOS builds)
       version: as bundled by python-build-standalone 20261009
       licence: X11 (MIT-style)
+  Microsoft Visual C++ runtime (vcruntime140.dll, vcruntime140_1.dll; Windows builds only)
+      licence: Microsoft proprietary redistributable terms (see the section at the end)
 
 The tree-sitter runtime, the OCaml runtime and the other components linked into
 the semgrep binary itself are covered by the licence files of the semgrep
@@ -1347,3 +1349,30 @@ authorization.
 
 -- vile:txtmode fc=72
 -- $Id: COPYING,v 1.10 2021/01/01 09:54:30 tom Exp $
+
+
+===============================================================================
+Microsoft Visual C++ runtime (Windows builds only)
+files: vcruntime140.dll, vcruntime140_1.dll
+licence: Microsoft's redistribution terms for the Visual C++ runtime
+===============================================================================
+
+The Windows distribution of semgrep ships vcruntime140.dll and
+vcruntime140_1.dll next to semgrep.exe. They are the Microsoft Visual C++
+runtime libraries that the python-build-standalone Windows archive of Python
+3.13.16 (release 20261009) contains, and which python313.dll and the extension
+modules depend on. They are Microsoft software, copyright Microsoft
+Corporation, and are not covered by the open-source licences in this file.
+
+They are redistributed under Microsoft's terms for redistributable code
+("Distributable Code") of the Visual Studio / Visual C++ Redistributable
+licence. Those terms are published by Microsoft at:
+
+  https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+
+and the Microsoft Visual C++ Redistributable packages can be obtained from:
+
+  https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
+
+The full text of the applicable terms is not reproduced here; refer to the
+pages above.

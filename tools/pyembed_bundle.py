@@ -77,11 +77,12 @@ STDLIB_EXCLUDED_TOP = frozenset(
 )
 STDLIB_EXCLUDED_ANYWHERE = frozenset({"tests", "idle_test", "__pycache__"})
 # Files kept from each *.dist-info directory.  importlib.metadata needs METADATA
-# (version(), requires()) and entry_points.txt (entry_points()); licences ship with
-# the code they cover.
+# (version(), requires()) and entry_points.txt (entry_points()); licence, notice and
+# authors files ship with the code they cover (also at the top of dist-info/licenses/,
+# where PEP 639 puts them) and feed ``--notices-out``.
 DIST_INFO_KEEP = re.compile(
     r"^(METADATA|entry_points\.txt|top_level\.txt|"
-    r"(LICEN[CS]E|COPYING|NOTICE|AUTHORS)[^/]*|licenses/.*)$"
+    r"(LICEN[CS]E|LICENCE|COPYING|NOTICE|AUTHORS)[^/]*|licenses/.*)$"
 )
 
 
@@ -307,6 +308,155 @@ def add_package(
 
 def keep_dist_info_file(rel_in_dist_info: str) -> bool:
     return bool(DIST_INFO_KEEP.match(rel_in_dist_info))
+
+
+# ---------------------------------------------------------------------------
+# Licence notices
+# ---------------------------------------------------------------------------
+
+NOTICES_HEADER = """\
+Licence notices for the Python packages bundled in this executable
+==================================================================
+
+The packages below are compiled to bytecode and embedded in the executable.
+Each section gives the package, the licence it declares in its metadata, its
+homepage and the full text of the licence and notice files shipped in its
+distribution.  Copyright remains with the respective authors.
+"""
+
+# Licence families whose terms ask for more than the licence text (the source
+# of the covered files must be obtainable).  Matched on the declared licence.
+SOURCE_AVAILABLE_NOTE = (
+    "This package is licensed under the Mozilla Public License 2.0 (MPL-2.0). "
+    "It is included unmodified; its source code is available at {url} and on "
+    "PyPI (https://pypi.org/project/{name}/{version}/#files)."
+)
+
+
+@dataclass
+class DistNotice:
+    """What the notices file says about one bundled distribution."""
+
+    name: str
+    version: str
+    license: str
+    homepage: str
+    texts: List[Tuple[str, str]]  # (file name within the dist-info, text)
+
+
+def parse_core_metadata(data: bytes) -> Dict[str, List[str]]:
+    """The header fields of a core-metadata (METADATA) file, in order."""
+    import email.parser
+
+    msg = email.parser.BytesParser().parsebytes(data, headersonly=True)
+    out: Dict[str, List[str]] = {}
+    for k, v in msg.items():
+        out.setdefault(k.lower(), []).append(" ".join(str(v).split()))
+    return out
+
+
+def declared_license(fields: Dict[str, List[str]]) -> str:
+    """``License-Expression``, else ``License`` (when a short identifier, not a
+    pasted licence text), else the ``License ::`` classifiers, else ""."""
+    expr = fields.get("license-expression", [""])[0]
+    if expr:
+        return expr
+    lic = fields.get("license", [""])[0]
+    if lic and lic.upper() not in ("UNKNOWN", "NONE") and len(lic) <= 100:
+        return lic
+    cls = [
+        c.rsplit("::", 1)[-1].strip()
+        for c in fields.get("classifier", [])
+        if c.startswith("License ::")
+    ]
+    cls = [c for c in cls if c != "OSI Approved"]
+    return ", ".join(cls)
+
+
+def homepage_of(fields: Dict[str, List[str]]) -> str:
+    """``Home-page``, else the first ``Project-URL`` named like a homepage or
+    source link, else the first ``Project-URL``."""
+    if fields.get("home-page"):
+        return fields["home-page"][0]
+    urls: List[Tuple[str, str]] = []
+    for v in fields.get("project-url", []):
+        label, _, url = v.partition(",")
+        urls.append((label.strip().lower(), url.strip()))
+    for want in ("homepage", "home", "source", "repository", "github"):
+        for label, url in urls:
+            if label == want and url:
+                return url
+    return urls[0][1] if urls else ""
+
+
+def collect_notices(members: Dict[str, "Member"]) -> List[DistNotice]:
+    """One DistNotice per ``*.dist-info`` directory among the bundle members
+    (those with a METADATA file), sorted by normalized name."""
+    dists: Dict[str, Dict[str, bytes]] = {}
+    for arc, m in members.items():
+        top, _, rest = arc.partition("/")
+        if top.endswith(".dist-info") and rest:
+            dists.setdefault(top, {})[rest] = m.data
+    out: List[DistNotice] = []
+    for di, files in dists.items():
+        if "METADATA" not in files:
+            continue
+        fields = parse_core_metadata(files["METADATA"])
+        texts = [
+            (rel, files[rel].decode("utf-8", "replace").strip("\r\n") + "\n")
+            for rel in sorted(files)
+            if rel != "METADATA"
+            and keep_dist_info_file(rel)
+            and not rel.endswith("/")
+            and rel not in ("entry_points.txt", "top_level.txt")
+        ]
+        name = fields.get("name", [di.rpartition("-")[0]])[0]
+        version = fields.get("version", [di[: -len(".dist-info")].rpartition("-")[2]])[
+            0
+        ]
+        out.append(
+            DistNotice(
+                name, version, declared_license(fields), homepage_of(fields), texts
+            )
+        )
+    out.sort(key=lambda d: (normalize_dist(d.name), d.version))
+    return out
+
+
+def render_notices(dists: Sequence[DistNotice]) -> str:
+    """The text of the notices file for [dists] (deterministic)."""
+    rule = "=" * 78
+    parts = [NOTICES_HEADER]
+    for d in dists:
+        parts.append(
+            f"{rule}\n{d.name} {d.version}\n{rule}\n"
+            f"Declared licence: {d.license or '(none declared in the package metadata)'}\n"
+            f"Homepage: {d.homepage or '(none declared)'}\n"
+        )
+        if "MPL" in d.license.upper() or "MOZILLA PUBLIC" in d.license.upper():
+            parts.append(
+                SOURCE_AVAILABLE_NOTE.format(
+                    url=d.homepage or "https://pypi.org/project/" + d.name + "/",
+                    name=normalize_dist(d.name),
+                    version=d.version,
+                )
+                + "\n"
+            )
+        if not d.texts:
+            parts.append(
+                "No licence or notice file is shipped in this distribution; "
+                "see the homepage above for the licence terms.\n"
+            )
+        for rel, text in d.texts:
+            parts.append(f"--- {rel} ---\n\n{text}")
+    return "\n".join(parts) + "\n"
+
+
+def write_notices(contents: BundleContents, out: Path) -> None:
+    dists = collect_notices(contents.members)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_notices(dists), encoding="utf-8", newline="\n")
+    print(f"{out}: {len(dists)} distributions", file=sys.stderr)
 
 
 # Third-party files that are never read at run time: C sources/headers shipped next
@@ -984,6 +1134,8 @@ def cmd_bundle(args: argparse.Namespace) -> None:
             add_wheel(contents, w, exclude)
     for site in args.site:
         add_site(contents, site, exclude, exclude_dists)
+    if args.notices_out:
+        write_notices(contents, args.notices_out)
     finish_bundle(contents, args)
 
 
@@ -1708,6 +1860,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="NAME",
         help="distribution to leave out",
+    )
+    b.add_argument(
+        "--notices-out",
+        type=Path,
+        metavar="FILE",
+        help="also write a human-readable licence notices file: one section per "
+        "bundled distribution (name, version, declared licence, homepage, and the "
+        "licence/notice files kept from its dist-info)",
     )
     add_target_args(b)
     b.add_argument(

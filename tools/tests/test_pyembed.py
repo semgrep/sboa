@@ -1546,3 +1546,103 @@ def test_stdlib_shadow_refused(tmp_path: Path) -> None:
     std = parser.parse_args(["stdlib", "--out", "x"])
     bun = parser.parse_args(["bundle", "--name", "n", "--out", "x"])
     assert std.priority < bun.priority
+
+
+def test_licence_notices(tmp_path: Path) -> None:
+    """The licence, NOTICE and authors files of each wheel stay in the bundle
+    (also under dist-info/licenses/), and --notices-out writes one section per
+    distribution with the declared licence, the homepage and the texts."""
+    wheels = tmp_path / "w"
+    make_wheel(
+        wheels,
+        "alpha-1.2-py3-none-any.whl",
+        {
+            "alpha/__init__.py": "",
+            "alpha-1.2.dist-info/METADATA": """\
+                Metadata-Version: 2.4
+                Name: alpha
+                Version: 1.2
+                License-Expression: Apache-2.0
+                Project-URL: Homepage, https://example.org/alpha
+                """,
+            "alpha-1.2.dist-info/licenses/LICENSE": "Apache licence text\n",
+            "alpha-1.2.dist-info/licenses/NOTICE": "Alpha NOTICE text\n",
+            "alpha-1.2.dist-info/LICENCE.txt": "British spelling\n",
+            "alpha-1.2.dist-info/AUTHORS": "A. Author\n",
+            "alpha-1.2.dist-info/RECORD": "alpha/__init__.py,,\n",
+        },
+    )
+    make_wheel(
+        wheels,
+        "Cert_Pkg-3.0-py3-none-any.whl",
+        {
+            "cert_pkg/__init__.py": "",
+            "Cert_Pkg-3.0.dist-info/METADATA": """\
+                Metadata-Version: 2.1
+                Name: cert-pkg
+                Version: 3.0
+                Home-page: https://example.org/cert
+                License: MPL-2.0
+                """,
+            "Cert_Pkg-3.0.dist-info/LICENSE": "MPL text\n",
+        },
+    )
+    make_wheel(
+        wheels,
+        "bare-0.1-py3-none-any.whl",
+        {
+            "bare/__init__.py": "",
+            "bare-0.1.dist-info/METADATA": """\
+                Metadata-Version: 2.1
+                Name: bare
+                Version: 0.1
+                License: UNKNOWN
+                Classifier: License :: OSI Approved :: BSD License
+                """,
+        },
+    )
+    out = tmp_path / "o"
+    notices = tmp_path / "n" / "NOTICES.txt"
+    args = [
+        "bundle",
+        "--name",
+        "w",
+        "--wheels",
+        str(wheels),
+        "--out",
+        str(out),
+        "--zip-only",
+        "--notices-out",
+        str(notices),
+    ]
+    run_tool(*args)
+    with zipfile.ZipFile(out / "w_bundle.zip") as zf:
+        names = set(zf.namelist())
+    for kept in (
+        "alpha-1.2.dist-info/licenses/LICENSE",
+        "alpha-1.2.dist-info/licenses/NOTICE",
+        "alpha-1.2.dist-info/LICENCE.txt",
+        "alpha-1.2.dist-info/AUTHORS",
+        "alpha-1.2.dist-info/METADATA",
+    ):
+        assert kept in names, kept
+    assert "alpha-1.2.dist-info/RECORD" not in names
+    text = notices.read_text()
+    # sorted by name, one section each
+    assert text.index("\nalpha 1.2\n") < text.index("\nbare 0.1\n")
+    assert text.index("\nbare 0.1\n") < text.index("\ncert-pkg 3.0\n")
+    assert "Declared licence: Apache-2.0" in text
+    assert "Homepage: https://example.org/alpha" in text
+    assert "Apache licence text" in text and "Alpha NOTICE text" in text
+    assert "British spelling" in text and "A. Author" in text
+    # MPL: the source-availability sentence and the home page
+    assert "Declared licence: MPL-2.0" in text
+    assert "Mozilla Public License 2.0" in text and "https://example.org/cert" in text
+    assert "MPL text" in text
+    # classifier fallback; no files shipped
+    assert "Declared licence: BSD License" in text
+    assert "No licence or notice file is shipped" in text
+    # deterministic
+    first = text
+    run_tool(*args)
+    assert notices.read_text() == first
