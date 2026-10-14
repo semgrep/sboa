@@ -108,6 +108,9 @@ def sample(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Path]:
         "samplepkg/data/*",
         "--exclude",
         "**/tests/**",
+        # the generated-source checks below expect the ELF form, on any host
+        "--target",
+        "elf",
         "--out",
         str(out),
         "--mli",
@@ -291,10 +294,11 @@ def test_incbin_targets(
 
 
 @pytest.mark.skipif(
-    shutil.which("gcc") is None
+    not sys.platform.startswith("linux")
+    or shutil.which("gcc") is None
     or shutil.which("ocamlfind") is None
     and not Path("/usr/lib/ocaml/caml").is_dir(),
-    reason="needs gcc and OCaml headers",
+    reason="needs Linux (ELF), gcc and OCaml headers",
 )
 def test_elf_blob_compiles(sample: Dict[str, Path], tmp_path: Path) -> None:
     ocaml_where = (
