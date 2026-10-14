@@ -39,7 +39,14 @@
    instantiable from Python, not subclassable. Methods are instancemethod
    wrappers (PyInstanceMethod_New) around trampoline-bound builtins, so
    `self` arrives as the first positional argument. tp_dealloc releases the
-   generational root holding the OCaml value. */
+   generational root holding the OCaml value.
+
+   Counter: _pyembed.Counter, a final heap type whose instances hold one
+   64-bit C11 atomic. Python reads it through the `value` getter (C only,
+   so any Python thread may read it without entering OCaml); OCaml updates
+   it from any domain through the [@@noalloc] stubs below, which take the
+   address of the atomic and never touch Python or the OCaml runtime. Every
+   export module re-exports the type as <module>.Counter. */
 #include "pyembed_internal.h"
 
 #include <string.h>
@@ -49,6 +56,7 @@
 #define FN_CAPSULE "pyembed.fn"
 
 PyObject *pyembed_ocaml_error_type = NULL;
+static PyObject *counter_type = NULL; /* _pyembed.Counter */
 
 /* ------------------------------------------------------------------------ */
 /* Registry copied from OCaml at init                                         */
@@ -235,6 +243,9 @@ static PyObject *make_module(int k) {
   }
   if (!PyObject_HasAttrString(m, "OCamlError") &&
       PyModule_AddObjectRef(m, "OCamlError", pyembed_ocaml_error_type) != 0)
+    goto fail;
+  if (counter_type != NULL && !PyObject_HasAttrString(m, "Counter") &&
+      PyModule_AddObjectRef(m, "Counter", counter_type) != 0)
     goto fail;
   Py_DECREF(modname);
   return m;
@@ -468,6 +479,99 @@ value pyembed_class_unwrap(value v_cls, value v_o) {
 }
 
 /* ------------------------------------------------------------------------ */
+/* _pyembed.Counter                                                          */
+
+typedef struct {
+  PyObject_HEAD
+  _Atomic long long count;
+} counter;
+
+static PyObject *counter_new(PyTypeObject *type, PyObject *args,
+                             PyObject *kwds) {
+  if (PyTuple_GET_SIZE(args) != 0 || (kwds != NULL && PyDict_GET_SIZE(kwds) != 0)) {
+    PyErr_SetString(PyExc_TypeError, "Counter() takes no arguments");
+    return NULL;
+  }
+  counter *c = (counter *)type->tp_alloc(type, 0);
+  if (c == NULL) return NULL;
+  atomic_init(&c->count, 0);
+  return (PyObject *)c;
+}
+
+static PyObject *counter_value(PyObject *self, void *closure) {
+  return PyLong_FromLongLong(
+      atomic_load_explicit(&((counter *)self)->count, memory_order_relaxed));
+}
+
+static PyObject *counter_repr(PyObject *self) {
+  return PyUnicode_FromFormat(
+      "Counter(value=%lld)",
+      atomic_load_explicit(&((counter *)self)->count, memory_order_relaxed));
+}
+
+static PyGetSetDef counter_getset[] = {
+    {"value", counter_value, NULL,
+     "The current count (read atomically; never enters OCaml).", NULL},
+    {NULL, NULL, NULL, NULL, NULL}};
+
+static PyObject *make_counter_type(void) {
+  PyType_Slot slots[] = {
+      {Py_tp_new, counter_new},
+      {Py_tp_getset, counter_getset},
+      {Py_tp_repr, counter_repr},
+      {Py_tp_doc,
+       "Counter()\n--\n\nA 64-bit atomic counter, starting at 0, that OCaml "
+       "code updates from any domain while Python threads read `value`."},
+      {0, NULL}};
+  PyType_Spec spec = {
+      .name = "_pyembed.Counter",
+      .basicsize = sizeof(counter),
+      .itemsize = 0,
+      .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE,
+      .slots = slots,
+  };
+  return PyType_FromSpec(&spec);
+}
+
+/* Address of the atomic of a Counter instance (as a nativeint), or 0 if [v]
+   is not exactly a Counter. GIL held. */
+value pyembed_counter_ptr(value v) {
+  PyObject *o = pyembed_obj(v);
+  if (counter_type == NULL || Py_TYPE(o) != (PyTypeObject *)counter_type)
+    return caml_copy_nativeint(0);
+  return caml_copy_nativeint((intnat) & ((counter *)o)->count);
+}
+
+/* A new owned handle on the same object (keeps a Counter alive while OCaml
+   holds the address of its atomic). GIL held. */
+value pyembed_new_ref(value v) { return pyembed_wrap(Py_NewRef(pyembed_obj(v))); }
+
+/* The [@@noalloc] counter primitives: any thread, any domain, no lock. */
+value pyembed_counter_add_native(intnat p, intnat n) {
+  atomic_fetch_add_explicit((_Atomic long long *)p, (long long)n,
+                            memory_order_relaxed);
+  return Val_unit;
+}
+value pyembed_counter_add(value p, value n) {
+  return pyembed_counter_add_native(Nativeint_val(p), Long_val(n));
+}
+value pyembed_counter_set_native(intnat p, intnat n) {
+  atomic_store_explicit((_Atomic long long *)p, (long long)n,
+                        memory_order_relaxed);
+  return Val_unit;
+}
+value pyembed_counter_set(value p, value n) {
+  return pyembed_counter_set_native(Nativeint_val(p), Long_val(n));
+}
+intnat pyembed_counter_get_native(intnat p) {
+  return (intnat)atomic_load_explicit((_Atomic long long *)p,
+                                      memory_order_relaxed);
+}
+value pyembed_counter_get(value p) {
+  return Val_long(pyembed_counter_get_native(Nativeint_val(p)));
+}
+
+/* ------------------------------------------------------------------------ */
 /* The _pyembed builtin module                                               */
 
 static PyObject *init_pyembed_module(void);
@@ -609,6 +713,12 @@ static PyObject *init_pyembed_module(void) {
     }
   }
   if (PyModule_AddObjectRef(m, "OCamlError", pyembed_ocaml_error_type) != 0) {
+    Py_DECREF(m);
+    return NULL;
+  }
+  if (counter_type == NULL) counter_type = make_counter_type();
+  if (counter_type == NULL ||
+      PyModule_AddObjectRef(m, "Counter", counter_type) != 0) {
     Py_DECREF(m);
     return NULL;
   }

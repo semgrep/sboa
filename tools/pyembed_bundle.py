@@ -1155,13 +1155,20 @@ class SeamUse:
 
 
 def scan_code_for_module(
-    code: types.CodeType, module: str, where: str, use: SeamUse
+    code: types.CodeType,
+    module: str,
+    where: str,
+    use: SeamUse,
+    via: Sequence[Tuple[str, str]] = (),
 ) -> None:
     """Record attributes of ``module`` referenced by ``code`` (all nested code).
 
     Recognised: ``import M [as A]`` followed by ``A.x``, ``from M import x``,
     ``getattr(A, "x")``; ``from M import *`` and ``getattr(A, non_constant)`` are
-    reported as unverifiable.
+    reported as unverifiable. ``via`` lists re-exports ``(R, N)``: ``from R
+    import N [as A]`` binds ``A`` to the module like ``import M as A`` does (a
+    thin module that imports M once and that the rest of the program imports
+    it from). Dunder attributes (``__name__``...) are not seam names.
     """
     codes = list(iter_code(code))
     aliases: Set[str] = set()
@@ -1169,6 +1176,16 @@ def scan_code_for_module(
     for c in codes:
         ins = list(dis.get_instructions(c))
         for i, x in enumerate(ins):
+            for reexport, name in via:
+                if (
+                    x.opname == "IMPORT_NAME"
+                    and x.argval == reexport
+                    and i + 2 < len(ins)
+                    and ins[i + 1].opname == "IMPORT_FROM"
+                    and ins[i + 1].argval == name
+                    and ins[i + 2].opname in STORE_OPS
+                ):
+                    aliases.add(ins[i + 2].argval)
             if x.opname == "IMPORT_NAME" and x.argval == module:
                 j = i + 1
                 if j < len(ins) and ins[j].opname in STORE_OPS and not rest:
@@ -1204,7 +1221,8 @@ def scan_code_for_module(
                 nxt = ins[i + 1]
                 line = f"{where}:{lineno(x)}"
                 if nxt.opname == "LOAD_ATTR":
-                    use.add(nxt.argval, line)
+                    if not (nxt.argval.startswith("__") and nxt.argval.endswith("__")):
+                        use.add(nxt.argval, line)
                 elif (
                     i >= 1
                     and ins[i - 1].opname == "LOAD_GLOBAL"
@@ -1255,6 +1273,12 @@ def read_allow(path: Optional[Path]) -> Set[str]:
 
 def cmd_check_seam(args: argparse.Namespace) -> int:
     use = SeamUse()
+    via: List[Tuple[str, str]] = []
+    for spec in args.via:
+        reexport, sep, name = spec.partition(":")
+        if not sep or not reexport or not name:
+            raise ToolError(f"--via expects MODULE:NAME, got {spec!r}")
+        via.append((reexport, name))
     with zipfile.ZipFile(args.bundle) as zf:
         for arc in sorted(zf.namelist()):
             if not arc.endswith(".pyc"):
@@ -1264,7 +1288,9 @@ def cmd_check_seam(args: argparse.Namespace) -> int:
                 raise ToolError(
                     f"{arc}: compiled for another interpreter; run with the bundle's python"
                 )
-            scan_code_for_module(marshal.loads(data[16:]), args.module, arc[:-1], use)
+            scan_code_for_module(
+                marshal.loads(data[16:]), args.module, arc[:-1], use, via
+            )
     exports = read_exports(args.exports, args.module)
     allow = read_allow(args.allow)
     missing = sorted(set(use.names) - exports - allow)
@@ -1732,6 +1758,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="file (lines or JSON) or executable printing it",
     )
     c.add_argument("--allow", type=Path, help="names allowed to be exported-but-unused")
+    c.add_argument(
+        "--via",
+        action="append",
+        default=[],
+        metavar="MODULE:NAME",
+        help="`from MODULE import NAME` also binds the checked module "
+        "(a re-exporting module; repeatable)",
+    )
     c.set_defaults(func=cmd_check_seam)
 
     w = sub.add_parser(

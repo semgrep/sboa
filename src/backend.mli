@@ -310,3 +310,22 @@ val class_wrap : int -> Obj.t -> obj
 
 val class_unwrap : int -> obj -> Obj.t option
 (** The value of an instance of exactly class [i]. *)
+
+(** {2 Counters} *)
+
+val counter_ptr : obj -> nativeint
+(** Address of the atomic of a [_pyembed.Counter] instance, or [0n] if the
+    object is not exactly a [Counter]. *)
+
+val new_ref : obj -> obj
+(** A new owned handle on the same Python object. *)
+
+val counter_add : nativeint -> int -> unit
+(** Atomically add to the counter at this address. Any thread, any domain,
+    no lock, no allocation. *)
+
+val counter_set : nativeint -> int -> unit
+(** Atomically store. Same rules as {!counter_add}. *)
+
+val counter_get : nativeint -> int
+(** Atomically load. Same rules as {!counter_add}. *)

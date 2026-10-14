@@ -590,6 +590,26 @@ value pyembed_init(value args) {
   if (pyembed_frozen_table[0].name != NULL)
     PyImport_FrozenModules = pyembed_frozen_table;
 
+  /* UTF-8 mode (PEP 540). The isolated configuration does not configure
+     the LC_CTYPE locale, which would leave the filesystem, stdio and
+     preferred encodings at ASCII (non-ASCII paths and output would fail
+     with encoding errors); force UTF-8 for all of them, as `python -X utf8`
+     does (init-config.html#c.PyPreConfig.utf8_mode). Must precede the
+     Py_DecodeLocale and PyConfig_SetBytesArgv calls below, which decode
+     with the pre-configured encoding. */
+  PyPreConfig pre;
+  PyPreConfig_InitIsolatedConfig(&pre);
+  pre.utf8_mode = 1;
+  PyStatus st = Py_PreInitialize(&pre);
+  if (PyStatus_Exception(st)) {
+    char buf[1024];
+    snprintf(buf, sizeof buf, "pyembed: Py_PreInitialize: %s%s%s",
+             st.func ? st.func : "", st.func ? ": " : "",
+             st.err_msg ? st.err_msg : "failed");
+    init_error = caml_stat_strdup(buf);
+    caml_failwith(buf);
+  }
+
   PyConfig config;
   PyConfig_InitIsolatedConfig(&config);
   config.module_search_paths_set = 1;
@@ -600,7 +620,7 @@ value pyembed_init(value args) {
   config.pathconfig_warnings = 0;
   config.use_frozen_modules = 1;
   config.user_site_directory = 0;
-  PyStatus st = set_string(&config, &config.program_name, v_prog);
+  st = set_string(&config, &config.program_name, v_prog);
   if (!PyStatus_Exception(st))
     st = set_string(&config, &config.executable, v_prog);
   if (!PyStatus_Exception(st) && Is_some(v_home))

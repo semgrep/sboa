@@ -154,3 +154,17 @@ external frame_args : unit -> obj array = "pyembed_frame_args"
 external frame_kwnames : unit -> string array = "pyembed_frame_kwnames"
 external class_wrap : int -> Obj.t -> obj = "pyembed_class_wrap"
 external class_unwrap : int -> obj -> Obj.t option = "pyembed_class_unwrap"
+external counter_ptr : obj -> nativeint = "pyembed_counter_ptr"
+external new_ref : obj -> obj = "pyembed_new_ref"
+
+external counter_add : (nativeint[@unboxed]) -> (int[@untagged]) -> unit
+  = "pyembed_counter_add" "pyembed_counter_add_native"
+[@@noalloc]
+
+external counter_set : (nativeint[@unboxed]) -> (int[@untagged]) -> unit
+  = "pyembed_counter_set" "pyembed_counter_set_native"
+[@@noalloc]
+
+external counter_get : (nativeint[@unboxed]) -> (int[@untagged])
+  = "pyembed_counter_get" "pyembed_counter_get_native"
+[@@noalloc]

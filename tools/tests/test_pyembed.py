@@ -818,6 +818,57 @@ def test_check_seam(tmp_path: Path) -> None:
     assert ok.returncode == 0, ok.stdout
 
 
+def test_check_seam_via_reexport(tmp_path: Path) -> None:
+    """A thin module imports the native module once; other modules import it from there."""
+    write_tree(
+        tmp_path / "src",
+        {
+            "app/__init__.py": "",
+            "app/api.py": """
+            try:
+                import _fake_core as core
+            except ImportError:
+                core = None
+            IN_BINARY = core.__name__ == "_fake_core"
+            """,
+            "app/user.py": """
+            from app.api import core
+
+
+            def f():
+                return core.rpc(1)
+            """,
+        },
+    )
+    run_tool(
+        "bundle",
+        "--name",
+        "app",
+        "--package",
+        f"app={tmp_path / 'src' / 'app'}",
+        "--out",
+        str(tmp_path / "o"),
+        "--zip-only",
+    )
+    exports = tmp_path / "exports.txt"
+    exports.write_text("rpc\n")
+    args = [
+        "check-seam",
+        "--bundle",
+        str(tmp_path / "o" / "app_bundle.zip"),
+        "--module",
+        "_fake_core",
+        "--exports",
+        str(exports),
+    ]
+    # without --via the use through app.api is invisible: the export looks unused
+    bad = run_tool(*args, check=False)
+    assert bad.returncode == 1
+    assert "_fake_core.rpc is exported but never used" in bad.stdout
+    ok = run_tool(*args, "--via", "app.api:core", check=False)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
 @pytest.mark.parametrize("libdynload", [None, "/nonexistent/pyembed/lib-dynload"])
 def test_no_libdynload(
     sample: Dict[str, Path], stdlib_zip: Path, libdynload: Any

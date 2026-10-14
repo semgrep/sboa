@@ -22,6 +22,8 @@
     - {!Conv}, fallible conversions with an error path;
     - {!Export}, which publishes OCaml functions and classes as builtin
       Python modules (registered before {!init}, as top-level effects);
+    - {!Counter}, 64-bit atomic counters that OCaml updates from any domain
+      while Python threads read them (progress reporting);
     - exception translation in both directions ({!Python_error},
       {!System_exit}, and [_pyembed.OCamlError], which resurrects the
       original OCaml exception when it crosses back).
@@ -331,6 +333,44 @@ module Class : sig
   (** The class name (without the module). *)
 end
 
+(** Atomic counters shared with Python: [_pyembed.Counter] (re-exported by
+    every export module as [<module>.Counter], unless the module registers
+    a class of that name itself).
+
+    Python creates one with [Counter()] and reads [counter.value] from any
+    thread: the getter is C code that never enters OCaml, so a Python
+    background thread can poll it while the main thread is inside a
+    detached export. OCaml gets a {!t} from the object (under the GIL) and
+    updates it with {!add}/{!incr}/{!set} from any domain or systhread,
+    without the GIL or the domain lock: they are [[@@noalloc]] C11 atomic
+    operations (relaxed ordering) that never call Python. *)
+module Counter : sig
+  type t
+  (** A counter: the address of the atomic inside a [Counter] instance and
+      an owned handle on that instance, so the object stays alive while [t]
+      is reachable (also after the export call that received it returned).
+      Immutable; safe to share between domains. *)
+
+  val of_py : t Conv.of_py
+  (** Of exactly a [_pyembed.Counter] instance (no subclass exists: the type
+      is final). *)
+
+  val of_object : gil -> Object.t -> t
+  (** {!of_py}, raising {!Conversion_error} on another type. *)
+
+  val add : t -> int -> unit
+  (** Atomically add (may be negative). Any domain, no lock, no allocation. *)
+
+  val incr : t -> unit
+  (** [add t 1]. *)
+
+  val set : t -> int -> unit
+  (** Atomically store. Any domain, no lock, no allocation. *)
+
+  val get : t -> int
+  (** Atomically load. Any domain, no lock, no allocation. *)
+end
+
 (** Registries that make OCaml callable from Python. Registration must
     happen on the main domain before {!init} (top-level effects of linked
     modules); later registrations raise [Invalid_argument]. *)
@@ -437,8 +477,10 @@ val init : Config.t -> unit
 (** Start the interpreter: register the {!Export} modules and [_pyembed] as
     builtin modules, apply an isolated [PyConfig] ([sys.path] =
     [extra_sys_path], no [site], no bytecode writing, no Python signal
-    handlers), install the frozen bundle importer if it is linked, set up
-    signal routing, then release the GIL. Must run on the main systhread of
+    handlers) in UTF-8 mode (PEP 540: the filesystem, stdio and preferred
+    encodings are UTF-8 whatever the locale, as with [python -X utf8]),
+    install the frozen bundle importer if it is linked, set up signal
+    routing, then release the GIL. Must run on the main systhread of
     domain 0. Python is never finalized; see {!exit}.
 
     Calling it again with an equal configuration does nothing; with a

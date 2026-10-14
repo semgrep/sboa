@@ -943,6 +943,33 @@ module Class = struct
       ~of_py:(unwrap c) ()
 end
 
+(* A counter is the address of the atomic inside a [_pyembed.Counter]
+   instance plus an owned handle on that instance, so the Python object (and
+   the address) stays valid as long as the OCaml value is reachable, even
+   after the export call that received it returned and released its
+   argument handles. The handle is released by its finalizer (deferred,
+   safe from any domain). *)
+module Counter = struct
+  (* [owner] is never read: it only keeps the Python object alive. *)
+  type t = { owner : Object.t; ptr : nativeint } [@@warning "-69"]
+
+  let of_py : t Conv.of_py =
+   fun () o ->
+    match B.counter_ptr o with
+    | 0n -> Error { path = []; expected = "Counter"; got = B.type_name o }
+    | ptr -> Ok { owner = B.new_ref o; ptr }
+
+  let of_object gil o =
+    match of_py gil o with
+    | Ok t -> t
+    | Error e -> raise (Conversion_error e)
+
+  let add t n = B.counter_add t.ptr n
+  let incr t = add t 1
+  let set t n = B.counter_set t.ptr n
+  let get t = B.counter_get t.ptr
+end
+
 module Export = struct
   type fn = entry_fn
 

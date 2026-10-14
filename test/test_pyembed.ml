@@ -40,6 +40,7 @@ exception My_error of int
 exception Mapped_error of string
 
 let m = "_pyembed_test"
+let kept_counter : Counter.t option Atomic.t = Atomic.make None
 let int_ = Conv.int
 let ret_int gil i = Conv.to_py Conv.int gil i
 
@@ -93,6 +94,32 @@ let () =
       let x = Conv.positional gil ~name:"x" (Conv.of_py int_) args 1 in
       let r = detach gil (fun () -> f x) in
       ret_int gil r);
+  (* Count to n in a worker domain (1 ms apart), the GIL and the domain
+     lock released: Python threads poll the counter meanwhile. *)
+  Export.register ~module_:m ~name:"count_in_domain" (fun gil args _ ->
+      let c = Conv.positional gil ~name:"counter" Counter.of_py args 0 in
+      let n = Conv.positional gil ~name:"n" (Conv.of_py int_) args 1 in
+      detach gil (fun () ->
+          Domain.join
+            (Domain.spawn (fun () ->
+                 for _ = 1 to n do
+                   Counter.incr c;
+                   Unix.sleepf 0.001
+                 done)));
+      ret_int gil (Counter.get c));
+  (* Keep a counter past the call, update it in a later call. *)
+  Export.register ~module_:m ~name:"keep_counter" (fun gil args _ ->
+      Atomic.set kept_counter
+        (Some (Conv.positional gil ~name:"counter" Counter.of_py args 0));
+      Object.none);
+  Export.register ~module_:m ~name:"bump_kept" (fun gil args _ ->
+      let n = Conv.positional gil ~name:"n" (Conv.of_py int_) args 0 in
+      (match Atomic.get kept_counter with
+      | Some c ->
+          Counter.add c n;
+          Counter.set c (Counter.get c * 10)
+      | None -> ());
+      Object.none);
   (* call a Python function with no conversion of its error. *)
   Export.register ~module_:m ~name:"call0" (fun gil args _ ->
       let f = Conv.positional gil ~name:"f" (Conv.of_py Conv.object_) args 0 in
@@ -243,6 +270,14 @@ let test_init () =
   Alcotest.(check bool)
     "no bytecode writing" true
     (py_eval_bool "__import__('sys').dont_write_bytecode");
+  (* UTF-8 mode, whatever the locale of the test process: non-ASCII paths
+     and output must not depend on LC_CTYPE. *)
+  Alcotest.(check bool)
+    "utf-8 mode" true
+    (py_eval_bool
+       "__import__('sys').flags.utf8_mode == 1 and \
+        __import__('sys').getfilesystemencoding() == 'utf-8' and \
+        __import__('sys').stdout.encoding.lower() == 'utf-8'");
   Alcotest.(check bool)
     "no site" true
     (py_eval_bool "'site' not in __import__('sys').modules");
@@ -1107,6 +1142,71 @@ let bench () =
     n with_gil_only call_in_scope call_keep call_with_gil (fst py_to_ocaml)
     (snd py_to_ocaml) round_trip
 
+(* Runs last among the scenarios: it spawns a domain, after which OCaml 5
+   refuses Unix.fork (test_fork_child). *)
+let test_counter () =
+  py_exec
+    "import threading, time, gc, _pyembed\n\
+     c = _pyembed.Counter()\n\
+     r0 = repr(c)\n\
+     seen = []\n\
+     stop = False\n\
+     def poll():\n\
+    \    while not stop:\n\
+    \        seen.append(c.value)\n\
+    \        time.sleep(0.001)\n\
+     th = threading.Thread(target=poll)\n\
+     th.start()\n\
+     final = t.count_in_domain(c, 300)\n\
+     stop = True\n\
+     th.join()\n\
+     mid = len([v for v in seen if 0 < v < 300])\n\
+     try:\n\
+    \    _pyembed.Counter(1)\n\
+    \    noargs = 'accepted'\n\
+     except TypeError as e:\n\
+    \    noargs = str(e)\n\
+     try:\n\
+    \    t.count_in_domain(3, 1)\n\
+    \    wrong = 'accepted'\n\
+     except TypeError as e:\n\
+    \    wrong = str(e)\n\
+     try:\n\
+    \    c.value = 3\n\
+    \    readonly = 'accepted'\n\
+     except AttributeError:\n\
+    \    readonly = 'read-only'\n\
+     k = _pyembed.Counter()\n\
+     t.keep_counter(k)\n\
+     kid = id(k)\n\
+     del k\n\
+     gc.collect()\n";
+  Alcotest.(check string) "repr" "Counter(value=0)" (py_eval_str "r0");
+  Alcotest.(check int) "returned" 300 (py_eval_int "final");
+  Alcotest.(check int) "value" 300 (py_eval_int "c.value");
+  Alcotest.(check bool) "seen while counting" true (py_eval_bool "mid > 0");
+  Alcotest.(check string)
+    "no arguments" "Counter() takes no arguments" (py_eval_str "noargs");
+  check_contains "TypeError" ~sub:"expected Counter, got int"
+    (py_eval_str "wrong");
+  Alcotest.(check string)
+    "value is read-only" "read-only" (py_eval_str "readonly");
+  (* the kept counter outlived Python's last reference *)
+  py_exec "t.bump_kept(4)";
+  (match Atomic.get kept_counter with
+  | Some c -> Alcotest.(check int) "kept counter" 40 (Counter.get c)
+  | None -> Alcotest.fail "no kept counter");
+  Atomic.set kept_counter None;
+  Gc.full_major ();
+  gc_flush ();
+  (* the export module's own Counter class is not replaced *)
+  Alcotest.(check string)
+    "module class kept" "An OCaml counter."
+    (py_eval_str "t.Counter.__doc__");
+  Alcotest.(check bool)
+    "same type elsewhere" true
+    (py_eval_bool "type(c).__module__ == '_pyembed'")
+
 (* ------------------------------------------------------------------------ *)
 
 let () =
@@ -1165,5 +1265,6 @@ let () =
           tc "frozen table" test_frozen;
           tc "objects" test_misc;
         ] );
+      ("counters", [ tc "atomic counter across domains" test_counter ]);
     ];
   bench ()

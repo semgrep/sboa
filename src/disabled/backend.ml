@@ -137,3 +137,11 @@ let frame_args = na
 let frame_kwnames = na
 let class_wrap _ _ = raise Not_available
 let class_unwrap _ _ = raise Not_available
+
+(* No [Counter] can exist without an interpreter ([counter_ptr] is the only
+   way to get an address), so the other counter primitives are unreachable. *)
+let counter_ptr = na
+let new_ref = na
+let counter_add _ _ = raise Not_available
+let counter_set _ _ = raise Not_available
+let counter_get = na
