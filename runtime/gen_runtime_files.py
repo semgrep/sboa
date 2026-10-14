@@ -104,10 +104,15 @@ def runtime_entries(cfg: Dict[str, Sexp]) -> List[Tuple[str, str]]:
     return out
 
 
+NOTICES_FILE = "THIRD_PARTY_NOTICES.txt"
+
+
 def stage(cfg: Dict[str, Sexp], layout: str, out_dir: str) -> None:
     """Copy the runtime files into [out_dir]/<dest> if the config's layout is
     [layout] ("libs": runtime_subdir is non-empty; "bin": it is empty), else
-    just create the empty [out_dir]."""
+    just create the empty [out_dir]. The licence notices of the components
+    compiled into the runtime ([NOTICES_FILE], next to this script) are copied
+    next to them, so that every distribution of the runtime carries them."""
     root = _str(cfg, "prefix")
     os.makedirs(out_dir, exist_ok=True)
     if ("libs" if _str(cfg, "runtime_subdir") else "bin") != layout:
@@ -117,6 +122,10 @@ def stage(cfg: Dict[str, Sexp], layout: str, out_dir: str) -> None:
         os.makedirs(os.path.dirname(out), exist_ok=True)
         shutil.copyfile(os.path.join(root, src), out)
         shutil.copymode(os.path.join(root, src), out)
+    here = os.path.dirname(os.path.abspath(__file__))
+    shutil.copyfile(
+        os.path.join(here, NOTICES_FILE), os.path.join(out_dir, NOTICES_FILE)
+    )
 
 
 def main(argv: List[str]) -> int:

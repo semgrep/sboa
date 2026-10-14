@@ -15,7 +15,9 @@
 ;; reports a dependency cycle), so the Windows file names are listed here
 ;; explicitly.
 ;; COUPLING: the Windows list must match the Windows branch of install.sh
-;; (runtime_files in cpython-embed.config).
+;; (runtime_files in cpython-embed.config).  THIRD_PARTY_NOTICES.txt (the
+;; licences of the libraries compiled into the runtime; copied by
+;; gen_runtime_files.py on every platform) is part of the list.
 ;;
 ;; Usage: this file is not a `dune` file on purpose (it needs cpython-embed
 ;; installed and `(using directory-targets 0.1)` in dune-project, so it must
@@ -29,7 +31,8 @@
  (deps
   %{lib:cpython-embed:cpython-embed.config}
   ../probe.sh
-  gen_runtime_files.py)
+  gen_runtime_files.py
+  THIRD_PARTY_NOTICES.txt)
  (action
   ; the cpython-embed interpreter: no other Python is needed to build
   (run sh ../probe.sh --exec-python -I gen_runtime_files.py
@@ -41,7 +44,8 @@
  (deps
   %{lib:cpython-embed:cpython-embed.config}
   ../probe.sh
-  gen_runtime_files.py)
+  gen_runtime_files.py
+  THIRD_PARTY_NOTICES.txt)
  (action
   ; the cpython-embed interpreter: no other Python is needed to build
   (run sh ../probe.sh --exec-python -I gen_runtime_files.py
@@ -65,6 +69,7 @@
   (runtime_bin/python3.dll as python3.dll)
   (runtime_bin/vcruntime140.dll as vcruntime140.dll)
   (runtime_bin/vcruntime140_1.dll as vcruntime140_1.dll)
+  (runtime_bin/THIRD_PARTY_NOTICES.txt as THIRD_PARTY_NOTICES.txt)
   (runtime_bin/_asyncio.pyd as _asyncio.pyd)
   (runtime_bin/_bz2.pyd as _bz2.pyd)
   (runtime_bin/_ctypes.pyd as _ctypes.pyd)
