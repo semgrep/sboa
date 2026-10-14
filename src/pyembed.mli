@@ -81,8 +81,10 @@ module Config : sig
             passed to the bundle importer. *)
     libdynload_dir : string option;
         (** Where the bundle importer loads C extension modules from; default
-            [<dir of executable>/libs/python3.X/lib-dynload]. The importer
-            gets [None] if the directory does not exist. *)
+            [<dir of executable>/libs/python3.X/lib-dynload] on unix and the
+            directory of the executable on Windows (the runtime files are
+            installed flat next to the [.exe]). The importer gets [None] if
+            the directory does not exist. *)
     handle_signals : bool;
         (** Route SIGINT/SIGTERM as described above; default [true]. *)
   }

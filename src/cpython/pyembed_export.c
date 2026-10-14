@@ -521,10 +521,12 @@ static PyObject *py_bundles(PyObject *self, PyObject *unused) {
   return l;
 }
 
-/* _pyembed.libdynload_dir(): the configured directory, or by default
-   <dirname(sys.executable)>/libs/pythonX.Y/lib-dynload (the layout the
-   runtime files are installed in next to the executable); None if that is
-   not an existing directory (on unix nothing ships there). */
+/* _pyembed.libdynload_dir(): the configured directory, or by default the
+   layout the runtime files are installed in next to the executable:
+   <dirname(sys.executable)>/libs/pythonX.Y/lib-dynload on unix, and the
+   executable's own directory on Windows (python3XY.dll and the *.pyd
+   extension modules sit flat next to the .exe, as DLL search requires);
+   None if that is not an existing directory. */
 static PyObject *py_libdynload_dir(PyObject *self, PyObject *unused) {
   PyObject *dir;
   if (libdynload_dir != NULL) {
@@ -542,9 +544,13 @@ static PyObject *py_libdynload_dir(PyObject *self, PyObject *unused) {
     if (sep == -2) return NULL;
     PyObject *base = sep < 0 ? PyUnicode_FromString(".") : PyUnicode_Substring(exe, 0, sep);
     if (base == NULL) return NULL;
+#ifdef _WIN32
+    dir = base;
+#else
     dir = PyUnicode_FromFormat("%U/libs/python%d.%d/lib-dynload", base,
                                PY_MAJOR_VERSION, PY_MINOR_VERSION);
     Py_DECREF(base);
+#endif
   }
   if (dir == NULL) return NULL;
   PyObject *bytes = NULL;
