@@ -110,7 +110,9 @@ Bundle application code (a Python package directory, or wheels with
 ```
 
 (add `app_bundle` to the executable's `modules` and `app_bundle_blob` to its
-`foreign_stubs`, with `(extra_deps app_bundle.zip)`). `probe.sh
+`foreign_stubs`, with `(extra_deps app_bundle.zip)`; the module registers the
+bundle when it is linked, so reference it, e.g. `let _ = App_bundle.bundle`,
+or link with `-linkall`). `probe.sh
 --exec-python` runs the interpreter of the config, so no other Python is
 needed at build time.
 
