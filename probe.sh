@@ -47,12 +47,15 @@ else
   config=${PYEMBED_CONFIG:-${OPAM_SWITCH_PREFIX:-/nonexistent}/lib/cpython-embed/cpython-embed.config}
   [ -f "$config" ] ||
     die "set PYEMBED_PREFIX or install cpython-embed (looked for $config)"
-  incdir=$(sexp_field "$config" incdir)
-  libdir=$(sexp_field "$config" libdir)
+  # Windows opam prefixes contain backslashes, which are escape characters in
+  # dune sexps; gcc/mingw and CPython accept forward slashes, so normalise.
+  slashes() { printf '%s' "$1" | sed 's#\\#/#g'; }
+  incdir=$(slashes "$(sexp_field "$config" incdir)")
+  libdir=$(slashes "$(sexp_field "$config" libdir)")
   lib_name=$(sexp_field "$config" lib_name)
-  lib_file=$(sexp_field "$config" lib_file)
-  stdlib_dir=$(sexp_field "$config" stdlib_dir)
-  python_exe=$(sexp_field "$config" python_exe)
+  lib_file=$(slashes "$(sexp_field "$config" lib_file)")
+  stdlib_dir=$(slashes "$(sexp_field "$config" stdlib_dir)")
+  python_exe=$(slashes "$(sexp_field "$config" python_exe)")
   [ -n "$incdir" ] && [ -n "$libdir" ] && [ -n "$lib_name$lib_file" ] ||
     die "incomplete config $config"
   case $lib_name in lib*) lib_name=${lib_name#lib} ;; esac
