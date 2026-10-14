@@ -1,0 +1,54 @@
+; pyembed.cpython: the real implementation of the pyembed virtual library,
+; linked against the CPython shared library located by probe.sh.
+
+(library
+ (name pyembed_cpython)
+ (public_name pyembed.cpython)
+ (implements pyembed)
+ ; threads.posix: the stubs use the systhreads master lock
+ ; (caml_enter/leave_blocking_section with several systhreads) and
+ ; pthread_atfork; unix: Unix._exit in Pyembed.exit lives in the virtual
+ ; library, listed here too so the link order is explicit.
+ (libraries threads.posix unix)
+ (foreign_stubs
+  (language c)
+  (names pyembed_runtime pyembed_object pyembed_export frozen_stub)
+  ; gcc/clang flags (mingw-w64 gcc on Windows); MSVC is not supported.
+  (flags
+   (:standard
+    -std=c99
+    -D_GNU_SOURCE
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+    (:include cflags.sexp))))
+ (c_library_flags
+  (:include link.sexp)))
+
+; Link flags from the installed cpython-embed package: depend on its config so
+; reinstalling CPython regenerates them.
+
+(rule
+ (targets cflags.sexp link.sexp)
+ (enabled_if %{lib-available:cpython-embed})
+ (deps
+  (:probe %{project_root}/probe.sh)
+  %{lib:cpython-embed:cpython-embed.config}
+  (env_var PYEMBED_PREFIX)
+  (env_var PYEMBED_CONFIG)
+  (env_var PYEMBED_NO_LIBDIR_RPATH))
+ (action
+  (run sh %{probe} %{targets})))
+
+; Without the package (PYEMBED_PREFIX / PYEMBED_CONFIG development setups),
+; the inputs are outside dune's view: re-probe on every build.
+
+(rule
+ (targets cflags.sexp link.sexp)
+ (enabled_if
+  (not %{lib-available:cpython-embed}))
+ (deps
+  (:probe %{project_root}/probe.sh)
+  (universe))
+ (action
+  (run sh %{probe} %{targets})))

@@ -1,0 +1,76 @@
+; Tests for pyembed. `make -C OSS/libs/pyembed test` runs them; so does any
+; @runtest that reaches this directory. The CPython they use is the one
+; pyembed.cpython links (probe.sh: the installed cpython-embed package, or
+; PYEMBED_PREFIX / PYEMBED_CONFIG; PYEMBED_PYTHON overrides the interpreter
+; that compiles the test's frozen table). The tests have no stdlib bundle:
+; they put the stdlib directory (PYEMBED_STDLIB) on sys.path.
+;
+; ../src/cpython/cflags.sexp stands for "the CPython in use" in the deps
+; below: it is regenerated when the cpython-embed config changes.
+
+(rule
+ (copy ../src/cpython/cflags.sexp cflags.sexp))
+
+(rule
+ (deps
+  ../src/cpython/cflags.sexp
+  (env_var PYEMBED_PREFIX)
+  (env_var PYEMBED_CONFIG))
+ (action
+  (with-stdout-to
+   stdlib_dir
+   (run sh %{dep:../probe.sh} --print-stdlib))))
+
+; A real frozen table (strong symbols overriding pyembed's weak empty
+; table), produced by the bundle tool's `freeze` subcommand.
+
+(rule
+ (targets frozen.c)
+ (deps
+  ../src/cpython/cflags.sexp
+  (:tool ../tools/pyembed_bundle.py)
+  (:probe frozen_probe.py)
+  (env_var PYEMBED_PREFIX)
+  (env_var PYEMBED_CONFIG)
+  (env_var PYEMBED_PYTHON))
+ (action
+  (run
+   sh
+   %{dep:../probe.sh}
+   --exec-python
+   -I
+   %{tool}
+   freeze
+   --module
+   _pyembed_frozen_probe=%{probe}
+   --out
+   %{targets})))
+
+(test
+ (name test_pyembed)
+ (modules test_pyembed)
+ (libraries pyembed pyembed.cpython alcotest threads.posix unix)
+ (foreign_stubs
+  (language c)
+  (names test_blob frozen)
+  (flags
+   (:standard
+    "-DPYEMBED_TEST_PAYLOAD=\"%{dep:bundle_payload.bin}\""
+    (:include cflags.sexp)))
+  (extra_deps bundle_payload.bin))
+ (deps exit_prog.exe stdlib_dir)
+ (action
+  (setenv
+   PYEMBED_STDLIB
+   %{read-lines:stdlib_dir}
+   (run %{test} --color=never))))
+
+(executable
+ (name exit_prog)
+ (modules exit_prog)
+ (libraries pyembed pyembed.cpython unix))
+
+(test
+ (name test_disabled)
+ (modules test_disabled)
+ (libraries pyembed pyembed.disabled alcotest))

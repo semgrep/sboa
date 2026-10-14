@@ -1,0 +1,52 @@
+; pyembed.frozen: the PyImport_FrozenModules table of an application, i.e.
+; the bundle importer (python/_pyembed_importer.py) and the stdlib
+; `encodings` package that interpreter start-up needs, marshalled into
+; frozen.c by the bundle tool's `freeze` subcommand.
+;
+; frozen.c defines strong pyembed_frozen_table/pyembed_frozen_magic, which
+; override the weak empty ones of pyembed.cpython (src/cpython/frozen_stub.c).
+; A library archive member is only linked when something references it, so
+; frozen_anchor.c (which #includes frozen.c) also defines a primitive that
+; Pyembed_frozen calls at module initialization; with -linkall that forces the
+; object, and hence the strong table, into every executable linking this
+; library. (Linking frozen.c as an object of the executable itself would also
+; work, but dune rejects foreign stubs in executables built in bytecode mode.)
+
+(library
+ (name pyembed_frozen)
+ (public_name pyembed.frozen)
+ (libraries pyembed)
+ (modules pyembed_frozen)
+ (library_flags (-linkall))
+ (foreign_stubs
+  (language c)
+  (names frozen_anchor)
+  (flags
+   (:standard
+    (:include cflags.sexp)))
+  (extra_deps frozen.c)))
+
+; frozen.c includes Python.h: same -I as pyembed.cpython.
+
+(rule
+ (copy ../src/cpython/cflags.sexp cflags.sexp))
+
+(rule
+ (targets frozen.c)
+ (deps %{lib:cpython-embed:cpython-embed.config})
+ (action
+  (run
+   sh
+   %{dep:../probe.sh}
+   --exec-python
+   -I
+   %{dep:../tools/pyembed_bundle.py}
+   --cpython-config
+   %{lib:cpython-embed:cpython-embed.config}
+   freeze
+   --module
+   _pyembed_importer=%{dep:../python/_pyembed_importer.py}
+   --stdlib-package
+   encodings
+   --out
+   frozen.c)))

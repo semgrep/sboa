@@ -1,0 +1,27 @@
+opam-version: "2.0"
+name: "pyembed"
+synopsis: "Embed CPython in an OCaml executable"
+description: """
+pyembed links a pinned CPython shared library into an OCaml program and
+exposes a small, explicit bridge: a GIL token, owned Python object handles
+with deferred reference release, fallible typed conversions, OCaml functions
+and classes exported as builtin Python modules, and exception translation in
+both directions. The library is a dune virtual library with two
+implementations: pyembed.cpython (the real bridge) and pyembed.disabled
+(raises Pyembed.Not_available, for executables that must not carry Python).
+"""
+maintainer: ["Semgrep Inc. <support@semgrep.com>"]
+authors: ["Semgrep Inc."]
+license: "LGPL-2.1-only"
+homepage: "https://github.com/semgrep/semgrep"
+bug-reports: "https://github.com/semgrep/semgrep/issues"
+depends: [
+  "ocaml" {>= "5.3.0"}
+  "dune" {>= "3.5"}
+  "cpython-embed"
+  "alcotest" {with-test}
+]
+build: [
+  ["dune" "subst"] {dev}
+  ["dune" "build" "-p" name "-j" jobs "@install" "@runtest" {with-test}]
+]

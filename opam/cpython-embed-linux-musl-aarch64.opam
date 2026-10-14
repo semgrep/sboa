@@ -1,0 +1,28 @@
+opam-version: "2.0"
+version: "3.13.16"
+synopsis: "CPython 3.13.16 runtime for embedding (linux-musl-aarch64)"
+description: """
+Platform child of cpython-embed: the pinned python-build-standalone
+20261009 `install_only_stripped` distribution for aarch64-unknown-linux-musl, verified by sha256
+and installed under lib/cpython-embed/ (headers, shared library, stdlib,
+cpython-embed.config). Select it through the cpython-embed umbrella package
+rather than installing it directly."""
+maintainer: ["Semgrep, Inc."]
+authors: ["Python Software Foundation" "python-build-standalone contributors"]
+license: "Python-2.0"
+homepage: "https://github.com/astral-sh/python-build-standalone"
+bug-reports: "https://github.com/semgrep/semgrep/issues"
+dev-repo: "git+https://github.com/semgrep/semgrep.git"
+available: [os = "linux" & arch = "arm64" & os-distribution = "alpine"]
+conflicts: ["cpython-embed-linux-gnu-x86_64" "cpython-embed-linux-gnu-aarch64" "cpython-embed-linux-musl-x86_64" "cpython-embed-macos-x86_64" "cpython-embed-macos-arm64" "cpython-embed-windows-x86_64"]
+build: [
+  ["sh" "./install.sh" "linux-musl-aarch64" "./python-build-standalone.tar.gz" "./stage/cpython-embed" "%{lib}%/cpython-embed"]
+]
+url {
+  src: "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.13.16%2B20261009-aarch64-unknown-linux-musl-install_only_stripped.tar.gz"
+  checksum: "sha256=97425de9a192c3be1a0ebd83ac02bf48ebc6ecc5c39d8faca7f1b09862ab60d5"
+}
+extra-source "python-build-standalone.tar.gz" {
+  src: "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.13.16%2B20261009-aarch64-unknown-linux-musl-install_only_stripped.tar.gz"
+  checksum: "sha256=97425de9a192c3be1a0ebd83ac02bf48ebc6ecc5c39d8faca7f1b09862ab60d5"
+}
