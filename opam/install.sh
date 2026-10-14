@@ -29,7 +29,10 @@ fi
 platform=$1
 archive=$2
 stage=$3
-final=$4
+# opam hands us a Windows-style prefix (C:\...) on Windows; backslashes are
+# escape characters inside the sexp config, so store forward slashes, which
+# every consumer (gcc/mingw, dune, CPython) accepts.
+final=$(printf '%s' "$4" | sed 's#\\#/#g')
 
 version=3.13.16
 pyver=3.13
