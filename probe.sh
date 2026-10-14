@@ -56,8 +56,9 @@ else
   lib_file=$(slashes "$(sexp_field "$config" lib_file)")
   stdlib_dir=$(slashes "$(sexp_field "$config" stdlib_dir)")
   python_exe=$(slashes "$(sexp_field "$config" python_exe)")
-  [ -n "$incdir" ] && [ -n "$libdir" ] && [ -n "$lib_name$lib_file" ] ||
+  if [ -z "$incdir" ] || [ -z "$libdir" ] || [ -z "$lib_name$lib_file" ]; then
     die "incomplete config $config"
+  fi
   case $lib_name in lib*) lib_name=${lib_name#lib} ;; esac
   lib_name=${lib_name%%.so*}; lib_name=${lib_name%.dylib}; lib_name=${lib_name%.dll}
 fi
