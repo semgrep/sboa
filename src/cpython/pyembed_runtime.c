@@ -31,13 +31,15 @@
    lock, so a Python-side dealloc that cannot prove it holds it queues the
    root instead.
 
-   Signals: see pyembed_setup_signals. */
+   Signals: see setup_signals (POSIX sigaction; CRT signal() on Windows). */
 #include "pyembed_internal.h"
 
 #include <errno.h>
-#include <pthread.h>
 #include <string.h>
+#ifndef _WIN32
+#include <pthread.h>
 #include <unistd.h>
+#endif
 
 extern const struct _frozen pyembed_frozen_table[];
 extern const unsigned char pyembed_frozen_magic[4];
@@ -227,7 +229,9 @@ value pyembed_live_roots(value unit) {
 /* ------------------------------------------------------------------------ */
 /* Thread checks and GIL scopes                                              */
 
+#ifndef _WIN32 /* no fork on Windows */
 static void on_fork_child(void) { pyembed_forked_child = 1; }
+#endif
 
 value pyembed_is_initialized(value unit) {
   return Val_bool(pyembed_initialized);
@@ -331,23 +335,73 @@ value pyembed_gc_collect(value unit) {
 
 #define N_ROUTED 2
 static const int routed_signals[N_ROUTED] = {SIGINT, SIGTERM};
-static struct sigaction saved_actions[N_ROUTED];
 static int routed[N_ROUTED];
 
-static void route_signal(int sig, siginfo_t *info, void *ctx) {
-  int saved_errno = errno;
-  int i = (sig == SIGINT) ? 0 : 1;
+/* The owner decision, shared by both platforms: hand the signal to Python if
+   Python owns the main thread (PyErr_SetInterruptEx is async-signal-safe and
+   exists on Windows too), else tell the caller to chain to OCaml. */
+static int route_to_python(int sig) {
   if (pyembed_in_python) {
     routed_signal = sig;
     routed_to_python = 1;
     (void)PyErr_SetInterruptEx(sig);
-  } else if (saved_actions[i].sa_flags & SA_SIGINFO) {
-    ocaml_signal_hint = 1;
-    saved_actions[i].sa_sigaction(sig, info, ctx);
-  } else if (saved_actions[i].sa_handler != SIG_DFL &&
-             saved_actions[i].sa_handler != SIG_IGN) {
-    ocaml_signal_hint = 1;
-    saved_actions[i].sa_handler(sig);
+    return 1;
+  }
+  ocaml_signal_hint = 1;
+  return 0;
+}
+
+#ifdef _WIN32
+/* Windows: the CRT signal() API (no sigaction, no siginfo_t, no SA_*). The
+   CRT resets a disposition to SIG_DFL before calling the handler, so the
+   handler re-installs itself, and again after chaining to OCaml's handler
+   (which re-installs *itself* the same way). SIGINT handlers run on a
+   thread the console creates; SIGTERM is never raised by the OS but is
+   routed anyway (raise()). */
+typedef void (*pyembed_sighandler)(int);
+static pyembed_sighandler saved_handlers[N_ROUTED];
+
+static void route_signal(int sig) {
+  int saved_errno = errno;
+  int i = (sig == SIGINT) ? 0 : 1;
+  signal(sig, route_signal);
+  if (!route_to_python(sig)) {
+    pyembed_sighandler h = saved_handlers[i];
+    if (h != SIG_DFL && h != SIG_IGN && h != SIG_ERR) {
+      h(sig);
+      signal(sig, route_signal);
+    }
+  }
+  errno = saved_errno;
+}
+
+static void install_route(int i) {
+  if (signal(routed_signals[i], route_signal) != SIG_ERR) routed[i] = 1;
+}
+
+/* Record OCaml's handler for signal [i]; false if OCaml does not handle it
+   (then the disposition is left as it was). signal() can only read the
+   current handler by replacing it, so it is put back. */
+static int save_ocaml_handler(int i) {
+  pyembed_sighandler cur = signal(routed_signals[i], SIG_DFL);
+  if (cur == SIG_ERR) return 0;
+  signal(routed_signals[i], cur);
+  if (cur == SIG_DFL || cur == SIG_IGN || cur == route_signal) return 0;
+  saved_handlers[i] = cur;
+  return 1;
+}
+#else
+static struct sigaction saved_actions[N_ROUTED];
+
+static void route_signal(int sig, siginfo_t *info, void *ctx) {
+  int saved_errno = errno;
+  int i = (sig == SIGINT) ? 0 : 1;
+  if (!route_to_python(sig)) {
+    if (saved_actions[i].sa_flags & SA_SIGINFO)
+      saved_actions[i].sa_sigaction(sig, info, ctx);
+    else if (saved_actions[i].sa_handler != SIG_DFL &&
+             saved_actions[i].sa_handler != SIG_IGN)
+      saved_actions[i].sa_handler(sig);
   }
   errno = saved_errno;
 }
@@ -360,6 +414,18 @@ static void install_route(int i) {
   sigemptyset(&sa.sa_mask);
   if (sigaction(routed_signals[i], &sa, NULL) == 0) routed[i] = 1;
 }
+
+/* Record OCaml's action for signal [i]; false if OCaml does not handle it. */
+static int save_ocaml_handler(int i) {
+  struct sigaction cur;
+  if (sigaction(routed_signals[i], NULL, &cur) != 0) return 0;
+  int ocaml_handles = (cur.sa_flags & SA_SIGINFO) ||
+                      (cur.sa_handler != SIG_DFL && cur.sa_handler != SIG_IGN);
+  if (!ocaml_handles) return 0;
+  saved_actions[i] = cur;
+  return 1;
+}
+#endif
 
 /* A signal was handed to Python (routed_to_python) but the main thread has
    left Python since, so Python may never look at it. Main thread, GIL and
@@ -416,7 +482,9 @@ static int setup_signals(int handle) {
   /* Like a default CPython start-up: writing to a closed pipe raises
      BrokenPipeError instead of killing the process. Inherited by child
      processes: spawners that need SIG_DFL must reset it. */
+#ifndef _WIN32 /* no SIGPIPE on Windows: a closed pipe is an EPIPE/EINVAL error */
   signal(SIGPIPE, SIG_IGN);
+#endif
   if (!handle) return 0;
   PyObject *mod = PyImport_ImportModule("_signal");
   if (mod == NULL) return -1;
@@ -425,12 +493,7 @@ static int setup_signals(int handle) {
   int rc = (py_handler && py_signal) ? 0 : -1;
   int any = 0;
   for (int i = 0; rc == 0 && i < N_ROUTED; i++) {
-    struct sigaction cur;
-    if (sigaction(routed_signals[i], NULL, &cur) != 0) continue;
-    int ocaml_handles = (cur.sa_flags & SA_SIGINFO) ||
-                        (cur.sa_handler != SIG_DFL && cur.sa_handler != SIG_IGN);
-    if (!ocaml_handles) continue;
-    saved_actions[i] = cur;
+    if (!save_ocaml_handler(i)) continue;
     /* Give Python a handler for the signal so a tripped signal raises
        KeyboardInterrupt (signal.signal also installs CPython's own C
        handler; ours replaces it just below). */
@@ -574,7 +637,9 @@ value pyembed_init(value args) {
   }
 
   pyembed_main_ident = PyThread_get_thread_ident();
+#ifndef _WIN32
   pthread_atfork(NULL, NULL, on_fork_child);
+#endif
   pyembed_initialized = 1;
 
   char err[2048];

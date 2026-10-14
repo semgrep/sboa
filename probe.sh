@@ -35,21 +35,37 @@ sexp_field() {
 incdir=""; libdir=""; lib_name=""; lib_file=""; stdlib_dir=""; python_exe=""
 if [ -n "${PYEMBED_PREFIX:-}" ]; then
   prefix=$PYEMBED_PREFIX
-  for d in "$prefix"/include/python3.*; do
-    [ -d "$d" ] && incdir=$d && break
-  done
-  [ -n "$incdir" ] || die "no include/python3.* under $prefix"
-  lib_name=$(basename "$incdir")      # e.g. python3.13
-  libdir=$prefix/lib
-  stdlib_dir=$libdir/$lib_name
-  python_exe=$prefix/bin/$lib_name
+  if [ -f "$prefix/include/Python.h" ]; then
+    # Windows install tree: include/, libs/python3XY.lib (import library),
+    # Lib/ (stdlib), python.exe.
+    incdir=$prefix/include
+    libdir=$prefix/libs
+    for f in "$libdir"/python3?*.lib; do
+      [ -f "$f" ] && lib_file=$f && break
+    done
+    [ -n "$lib_file" ] || die "no libs/python3XY.lib under $prefix"
+    lib_name=$(basename "$lib_file" .lib)  # e.g. python313
+    stdlib_dir=$prefix/Lib
+    python_exe=$prefix/python.exe
+  else
+    # Unix install tree: include/python3.X/, lib/libpython3.X.so, lib/python3.X/.
+    for d in "$prefix"/include/python3.*; do
+      [ -d "$d" ] && incdir=$d && break
+    done
+    [ -n "$incdir" ] || die "no include/python3.* under $prefix"
+    lib_name=$(basename "$incdir")      # e.g. python3.13
+    libdir=$prefix/lib
+    stdlib_dir=$libdir/$lib_name
+    python_exe=$prefix/bin/$lib_name
+  fi
 else
   config=${PYEMBED_CONFIG:-${OPAM_SWITCH_PREFIX:-/nonexistent}/lib/cpython-embed/cpython-embed.config}
   [ -f "$config" ] ||
     die "set PYEMBED_PREFIX or install cpython-embed (looked for $config)"
   # Windows opam prefixes contain backslashes, which are escape characters in
   # dune sexps; gcc/mingw and CPython accept forward slashes, so normalise.
-  slashes() { printf '%s' "$1" | sed 's#\\#/#g'; }
+  # (Quoted sexp atoms escape a backslash as two: decode that first.)
+  slashes() { printf '%s' "$1" | sed -e 's#\\\\#\\#g' -e 's#\\#/#g'; }
   incdir=$(slashes "$(sexp_field "$config" incdir)")
   libdir=$(slashes "$(sexp_field "$config" libdir)")
   lib_name=$(sexp_field "$config" lib_name)
