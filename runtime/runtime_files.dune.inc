@@ -15,7 +15,9 @@
 ;; reports a dependency cycle), so the Windows file names are listed here
 ;; explicitly.
 ;; COUPLING: the Windows list must match the Windows branch of
-;; ../toolchain/fetch.sh (runtime_files in cpython-embed.config).
+;; ../toolchain/fetch.sh (runtime_files in cpython-embed.config); the
+;; runtime_bin rule checks it (gen_runtime_files.py --check-install-list
+;; reads this file) and fails the build on a difference.
 ;; THIRD_PARTY_NOTICES.txt (the licences of the libraries compiled into the
 ;; runtime; copied by gen_runtime_files.py on every platform) is part of the
 ;; list.
@@ -43,11 +45,14 @@
   ../toolchain/cpython-embed.config
   ../probe.sh
   gen_runtime_files.py
-  THIRD_PARTY_NOTICES.txt)
+  THIRD_PARTY_NOTICES.txt
+  runtime_files.dune.inc)
  (action
-  ; the toolchain interpreter: no other Python is needed to build
+  ; the toolchain interpreter: no other Python is needed to build. The
+  ; staged files must be exactly the Windows install list below.
   (run sh ../probe.sh --exec-python -I gen_runtime_files.py
-   ../toolchain/cpython-embed.config --layout bin --out runtime_bin)))
+   ../toolchain/cpython-embed.config --layout bin --out runtime_bin
+   --check-install-list runtime_files.dune.inc)))
 
 (install
  (enabled_if

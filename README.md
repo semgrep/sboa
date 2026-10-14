@@ -47,7 +47,8 @@ Supported targets: x86_64 and aarch64 Linux (glibc and musl), x86_64 and arm64
 macOS, x86_64 Windows (mingw OCaml; the archive is the MSVC build, which keeps
 its own layout). Moving to another CPython release means editing `pbs.json`
 only (and the hard-coded Windows DLL list in `runtime/runtime_files.dune.inc`
-if the set of extension modules changes).
+if the set of extension modules changes; the Windows build fails, naming the
+files, until the list matches what the archive stages).
 
 ## `cpython-embed.config`
 
