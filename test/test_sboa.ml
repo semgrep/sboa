@@ -323,9 +323,12 @@ let test_exit_modes () =
    Alcotest.(check int) "status" 0 status;
    check_contains "non-daemon thread joined before exit" ~sub:"[thread done]"
      out);
-  (let status, out = run_child "./exit_prog.exe" [| "flush-fail" |] in
-   Alcotest.(check int) "failed flush -> 120" 120 status;
-   ignore out);
+  (* /dev/full (writes fail with ENOSPC) exists on Linux only *)
+  if Sys.file_exists "/dev/full" then begin
+    let status, out = run_child "./exit_prog.exe" [| "flush-fail" |] in
+    Alcotest.(check int) "failed flush -> 120" 120 status;
+    ignore out
+  end;
   let status, out = run_child "./exit_prog.exe" [| "init-fail" |] in
   Alcotest.(check int) "init failure" 0 status;
   check_contains "init failure" ~sub:"[same failure, no retry]" out
