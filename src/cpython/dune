@@ -26,14 +26,14 @@
   (:include link.sexp)))
 
 ; Link flags for the CPython described by toolchain/cpython-embed.config
-; (probe.sh reads it; PYEMBED_PREFIX / PYEMBED_CONFIG override it).
+; (probe.sh reads it; PYEMBED_CONFIG overrides it; PYEMBED_PREFIX goes
+; through the toolchain rule).
 
 (rule
  (targets cflags.sexp link.sexp)
  (deps
   (:probe %{project_root}/probe.sh)
   %{project_root}/toolchain/cpython-embed.config
-  (env_var PYEMBED_PREFIX)
   (env_var PYEMBED_CONFIG)
   (env_var PYEMBED_NO_LIBDIR_RPATH))
  (action

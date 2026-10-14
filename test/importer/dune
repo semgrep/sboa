@@ -12,7 +12,6 @@
  (deps
   ../../src/cpython/cflags.sexp
   ../../toolchain/cpython-embed.config
-  (env_var PYEMBED_PREFIX)
   (env_var PYEMBED_CONFIG))
  (action
   (with-stdout-to
@@ -26,7 +25,6 @@
   ../../toolchain/cpython-embed.config
   (:tool ../../tools/pyembed_bundle.py)
   (:importer ../../python/_pyembed_importer.py)
-  (env_var PYEMBED_PREFIX)
   (env_var PYEMBED_CONFIG)
   (env_var PYEMBED_PYTHON))
  (action
@@ -49,7 +47,6 @@
   ../../toolchain/cpython-embed.config
   (:tool ../../tools/pyembed_bundle.py)
   (source_tree demopkg)
-  (env_var PYEMBED_PREFIX)
   (env_var PYEMBED_CONFIG)
   (env_var PYEMBED_PYTHON))
  (action
@@ -72,7 +69,7 @@
 (executable
  (name importer_prog)
  (modules importer_prog demo_bundle)
- (libraries pyembed pyembed.cpython)
+ (libraries pyembed pyembed.cpython pyembed.toolchain)
  (foreign_stubs
   (language c)
   (names demo_bundle_blob frozen)
@@ -91,4 +88,5 @@
    (progn
     (run %{exe:importer_prog.exe} ok)
     (run %{exe:importer_prog.exe} empty)
-    (run %{exe:importer_prog.exe} truncated)))))
+    (run %{exe:importer_prog.exe} truncated)
+    (run %{exe:importer_prog.exe} dynload)))))

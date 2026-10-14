@@ -10,15 +10,14 @@
 #                                    dune rules; no other Python is needed);
 #                                    $PYEMBED_PYTHON overrides it
 #
-# Sources, in order of precedence:
-#   1. $PYEMBED_PREFIX: a CPython install tree (include/pythonX.Y/Python.h,
-#      lib/libpythonX.Y.so|.dylib, lib/pythonX.Y/). For development and tests.
-#   2. $PYEMBED_CONFIG, or toolchain/cpython-embed.config next to this
-#      script (in dune's build directory: the file the toolchain rule
-#      generates; rules calling probe.sh must depend on it): a sexp with at
-#      least the fields (incdir ..) (libdir ..) and either (lib_file ..) (the
-#      shared library or import library, linked by full path; preferred) or
-#      (lib_name ..) (linked as -l<lib_name>); optionally (stdlib_dir ..).
+# Source: $PYEMBED_CONFIG, or toolchain/cpython-embed.config next to this
+# script (in dune's build directory: the file the toolchain rule generates,
+# in both of its modes; rules calling probe.sh must depend on it): a sexp
+# with at least the fields (incdir ..) (libdir ..) and either (lib_file ..)
+# (the shared library or import library, linked by full path; preferred) or
+# (lib_name ..) (linked as -l<lib_name>); optionally (stdlib_dir ..).
+# PYEMBED_PREFIX is not read here: it is an input of toolchain/fetch.sh,
+# which writes the config from that prefix's interpreter.
 #
 # Executables get two rpaths at link time: $ORIGIN/libs (Linux) or
 # @loader_path/libs (macOS), where the runtime library ships next to the
@@ -34,51 +33,24 @@ sexp_field() {
 }
 
 incdir=""; libdir=""; lib_name=""; lib_file=""; stdlib_dir=""; python_exe=""
-if [ -n "${PYEMBED_PREFIX:-}" ]; then
-  prefix=$PYEMBED_PREFIX
-  if [ -f "$prefix/include/Python.h" ]; then
-    # Windows install tree: include/, libs/python3XY.lib (import library),
-    # Lib/ (stdlib), python.exe.
-    incdir=$prefix/include
-    libdir=$prefix/libs
-    for f in "$libdir"/python3?*.lib; do
-      [ -f "$f" ] && lib_file=$f && break
-    done
-    [ -n "$lib_file" ] || die "no libs/python3XY.lib under $prefix"
-    lib_name=$(basename "$lib_file" .lib)  # e.g. python313
-    stdlib_dir=$prefix/Lib
-    python_exe=$prefix/python.exe
-  else
-    # Unix install tree: include/python3.X/, lib/libpython3.X.so, lib/python3.X/.
-    for d in "$prefix"/include/python3.*; do
-      [ -d "$d" ] && incdir=$d && break
-    done
-    [ -n "$incdir" ] || die "no include/python3.* under $prefix"
-    lib_name=$(basename "$incdir")      # e.g. python3.13
-    libdir=$prefix/lib
-    stdlib_dir=$libdir/$lib_name
-    python_exe=$prefix/bin/$lib_name
-  fi
-else
-  config=${PYEMBED_CONFIG:-$(dirname "$0")/toolchain/cpython-embed.config}
-  [ -f "$config" ] ||
-    die "no $config: build toolchain/cpython-embed.config first, or set PYEMBED_PREFIX or PYEMBED_CONFIG"
-  # Windows paths may contain backslashes, which are escape characters in
-  # dune sexps; gcc/mingw and CPython accept forward slashes, so normalise.
-  # (Quoted sexp atoms escape a backslash as two: decode that first.)
-  slashes() { printf '%s' "$1" | sed -e 's#\\\\#\\#g' -e 's#\\#/#g'; }
-  incdir=$(slashes "$(sexp_field "$config" incdir)")
-  libdir=$(slashes "$(sexp_field "$config" libdir)")
-  lib_name=$(sexp_field "$config" lib_name)
-  lib_file=$(slashes "$(sexp_field "$config" lib_file)")
-  stdlib_dir=$(slashes "$(sexp_field "$config" stdlib_dir)")
-  python_exe=$(slashes "$(sexp_field "$config" python_exe)")
-  if [ -z "$incdir" ] || [ -z "$libdir" ] || [ -z "$lib_name$lib_file" ]; then
-    die "incomplete config $config"
-  fi
-  case $lib_name in lib*) lib_name=${lib_name#lib} ;; esac
-  lib_name=${lib_name%%.so*}; lib_name=${lib_name%.dylib}; lib_name=${lib_name%.dll}
+config=${PYEMBED_CONFIG:-$(dirname "$0")/toolchain/cpython-embed.config}
+[ -f "$config" ] ||
+  die "no $config: build toolchain/cpython-embed.config first, or set PYEMBED_CONFIG"
+# Windows paths may contain backslashes, which are escape characters in
+# dune sexps; gcc/mingw and CPython accept forward slashes, so normalise.
+# (Quoted sexp atoms escape a backslash as two: decode that first.)
+slashes() { printf '%s' "$1" | sed -e 's#\\\\#\\#g' -e 's#\\#/#g'; }
+incdir=$(slashes "$(sexp_field "$config" incdir)")
+libdir=$(slashes "$(sexp_field "$config" libdir)")
+lib_name=$(sexp_field "$config" lib_name)
+lib_file=$(slashes "$(sexp_field "$config" lib_file)")
+stdlib_dir=$(slashes "$(sexp_field "$config" stdlib_dir)")
+python_exe=$(slashes "$(sexp_field "$config" python_exe)")
+if [ -z "$incdir" ] || [ -z "$libdir" ] || [ -z "$lib_name$lib_file" ]; then
+  die "incomplete config $config"
 fi
+case $lib_name in lib*) lib_name=${lib_name#lib} ;; esac
+lib_name=${lib_name%%.so*}; lib_name=${lib_name%.dylib}; lib_name=${lib_name%.dll}
 
 case "${1:-}" in
   --print-libdir) echo "$libdir"; exit 0 ;;
@@ -87,7 +59,7 @@ case "${1:-}" in
   --exec-python)
     shift
     python_exe=${PYEMBED_PYTHON:-$python_exe}
-    [ -n "$python_exe" ] || die "no python_exe (config or PYEMBED_PREFIX)"
+    [ -n "$python_exe" ] || die "no python_exe in the config"
     # -B: never write __pycache__ into the toolchain tree (a dune
     # directory target: a modified target makes dune re-run its rule).
     exec "$python_exe" -B "$@" ;;

@@ -20,15 +20,26 @@ application.
 `make cpython-embed` builds only this rule (the only step that needs the
 network, and only while the archive is not cached). Inputs:
 
-- `PYEMBED_ARCHIVE_DIR=<dir>`: look for (and download into) the archive in
-  `<dir>` instead of `toolchain/cache/`. With the archive already there the build
-  is offline.
-- `PYEMBED_PREFIX=<prefix>`: use an installed CPython of the same minor version
-  (built with a shared libpython; Homebrew's `python@3.13` is
+- `PYEMBED_ARCHIVE_DIR=<absolute dir>`: look for (and download into) the
+  archive in `<dir>` instead of `toolchain/cache/`. With the archive already
+  there the build is offline. A private copy of the archive is sha256-checked
+  and unpacked, so a shared directory is safe.
+- `PYEMBED_PREFIX=<absolute prefix>`: use an installed CPython of the same
+  minor version (shared libpython, no free threading, no `Py_DEBUG`, and a
+  libpython whose `Py_GetVersion` is the interpreter's; Homebrew's
+  `python@3.13` is
   `$(brew --prefix python@3.13)/Frameworks/Python.framework/Versions/3.13`)
   instead of the archive: nothing is downloaded or copied, the config points
-  into the prefix, its `runtime_files` is empty, and executables find libpython
-  through the absolute rpath `probe.sh` adds. Unix layouts only.
+  into the prefix (its logical path, so an `opt/` symlink survives upgrades),
+  its `runtime_files` is empty, and executables find libpython through the
+  absolute rpath `probe.sh` adds. Such builds keep C extension modules in
+  their own `lib-dynload`: it is recorded as `external_libdynload_dir` and
+  compiled into `pyembed.toolchain`, whose `libdynload_dir ()` is the value an
+  application passes as `Pyembed.Config.libdynload_dir` (the fallback when no
+  `libs/python3.X/lib-dynload` sits next to the executable). The rule tracks
+  the prefix's `bin/python3*` and `lib/libpython3*`, so an upgraded install
+  re-runs it. Unix layouts only. `PYEMBED_PREFIX` is read by `fetch.sh` only;
+  everything else reads the config.
 - `CPYTHON_EMBED_MAGIC`: bytecode magic number, when the interpreter cannot run
   on the build machine.
 
@@ -49,6 +60,9 @@ slashes. Consumers must ignore unknown fields.
 | `version` | CPython version, e.g. `3.13.16` |
 | `platform` | `linux-gnu-x86_64`, `linux-gnu-aarch64`, `linux-musl-x86_64`, `linux-musl-aarch64`, `macos-x86_64`, `macos-arm64` or `windows-x86_64`; the bundle tool evaluates wheel markers for it |
 | `magic` | importlib bytecode magic as an int (3571 for 3.13) |
+| `release`, `archive_sha256` | the python-build-standalone release and the archive's sha256 (downloaded archive only): a manifest change always changes the config, so every rule depending on it re-runs |
+| `install_fingerprint` | `PYEMBED_PREFIX` only: the interpreter's `sys.version` and libpython's size and mtime, for the same reason |
+| `external_libdynload_dir` | `PYEMBED_PREFIX` only: the external CPython's `lib-dynload` (empty otherwise) |
 | `prefix`, `incdir`, `libdir`, `stdlib_dir`, `libdynload_dir`, `python_exe` | paths into the CPython tree |
 | `lib_name` | `python3.13` (`python313` on Windows) |
 | `lib_file` | the library to link by full path: `libpython3.13.so.1.0`, `libpython3.13.dylib` or `libs/python313.lib` |
@@ -56,8 +70,9 @@ slashes. Consumers must ignore unknown fields.
 | `runtime_libdynload` | extension-module directory relative to `bin/<runtime_subdir>/` (empty when there is none) |
 | `runtime_files` | the files that must sit next to the executable: libpython on Linux and macOS; the DLLs and `.pyd` files (without Tk and the test modules) on Windows |
 
-`probe.sh` turns the config into compiler and linker flags (`$PYEMBED_CONFIG`
-or `$PYEMBED_PREFIX` override it); `runtime/` installs `runtime_files`
+Paths containing `"`, `)` or a backslash are refused by `fetch.sh` (the
+readers do not unescape them). `probe.sh` turns the config into compiler and
+linker flags (`$PYEMBED_CONFIG` overrides it); `runtime/` installs `runtime_files`
 (`bin/libs/` or next to the `.exe`) together with `THIRD_PARTY_NOTICES.txt`.
 
 ## Building and testing

@@ -9,17 +9,37 @@
 ; This rule is the only one that touches the network, and only when the
 ; archive is not cached yet. It runs outside opam (`make` drives dune), so
 ; there is no opam package for CPython and no per-platform lockfile entry.
+;
+; (sandbox none): the outputs record absolute paths into this build
+; directory (the config's paths, the rpath probe.sh derives from them), so
+; the rule must run in place, and its outputs depend on the workspace
+; location (user rules are not stored in dune's shared cache by default;
+; keep it that way). The globs track an external CPython (PYEMBED_PREFIX):
+; an upgraded interpreter or libpython re-runs the rule.
 
 (dirs :standard \ cache)
 
 (rule
  (targets
   cpython-embed.config
+  pyembed_toolchain_data.ml
   (dir prefix))
  (deps
   pbs.json
   fetch.sh
   (env_var PYEMBED_PREFIX)
-  (env_var CPYTHON_EMBED_MAGIC))
+  (env_var CPYTHON_EMBED_MAGIC)
+  (glob_files %{env:PYEMBED_PREFIX=/nonexistent}/bin/python3*)
+  (glob_files %{env:PYEMBED_PREFIX=/nonexistent}/lib/libpython3*)
+  (sandbox none))
  (action
   (run sh fetch.sh %{ocaml-config:target} pbs.json . %{workspace_root})))
+
+; pyembed.toolchain: facts about the toolchain an executable was built with
+; (see pyembed_toolchain.mli).
+
+(library
+ (name pyembed_toolchain)
+ (public_name pyembed.toolchain)
+ (modules pyembed_toolchain pyembed_toolchain_data)
+ (private_modules pyembed_toolchain_data))
