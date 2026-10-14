@@ -1509,7 +1509,10 @@ def test_download_robustness(tmp_path: Path) -> None:
         pb.download("http://example.invalid/x.whl", dest, good, opener=opener_ok)
 
 
-@pytest.mark.skipif(shutil.which("gcc") is None, reason="needs gcc")
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or shutil.which("gcc") is None,
+    reason="needs Linux (the fixture's blob is ELF) and gcc",
+)
 def test_blob_length_computed_by_assembler(
     sample: Dict[str, Path], tmp_path: Path
 ) -> None:
