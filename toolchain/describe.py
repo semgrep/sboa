@@ -154,18 +154,22 @@ def find_unix_lib(kind: str, prefix: str) -> Tuple[str, str, bool]:
     libdir = sysconfig.get_config_var("LIBDIR")
     if libdir and libdir not in dirs:
         dirs.append(libdir)
-    for d in dirs:
-        for name in names:
-            path = os.path.join(d, name)
-            if os.path.exists(path):
-                if kind == "macho":
-                    # A framework build (Homebrew, python.org) has an absolute
-                    # install name: a copy next to the executable is never
-                    # loaded.
-                    ship = not sysconfig.get_config_var("PYTHONFRAMEWORK")
-                    return path, name, ship
-                soname = instsoname if instsoname and "/" not in instsoname else name
-                return path, soname, True
+    candidates = [(d, name) for d in dirs for name in names]
+    framework = sysconfig.get_config_var("PYTHONFRAMEWORK")
+    if kind == "macho" and framework:
+        # <prefix> is Python.framework/Versions/3.13, whose library is
+        # <prefix>/Python (lib/libpython3.13.dylib, when present, links to it).
+        candidates.append((prefix, framework))
+    for d, name in candidates:
+        path = os.path.join(d, name)
+        if not os.path.exists(path):
+            continue
+        if kind == "macho":
+            # A framework build has an absolute install name: a copy next to
+            # the executable would never be loaded.
+            return path, name, not framework
+        soname = instsoname if instsoname and "/" not in instsoname else name
+        return path, soname, True
     raise DescribeError(
         f"no {' or '.join(names)} in {' or '.join(dirs)}: the CPython must be"
         " built with a shared libpython (--enable-shared)"
@@ -184,7 +188,13 @@ def check_interpreter() -> None:
         raise DescribeError(f"{sys.executable} is a free-threaded build")
     if hasattr(sys, "gettotalrefcount") or sysconfig.get_config_var("Py_DEBUG"):
         raise DescribeError(f"{sys.executable} is a debug (Py_DEBUG) build")
-    if os.name != "nt" and not sysconfig.get_config_var("Py_ENABLE_SHARED"):
+    # A macOS framework build (python.org, Homebrew) has a shared library
+    # (the framework's) without Py_ENABLE_SHARED.
+    if (
+        os.name != "nt"
+        and not sysconfig.get_config_var("Py_ENABLE_SHARED")
+        and not sysconfig.get_config_var("PYTHONFRAMEWORK")
+    ):
         raise DescribeError(
             f"{sys.executable} is built without a shared libpython"
             " (Py_ENABLE_SHARED is off)"
