@@ -18,9 +18,12 @@ bug-reports: "https://github.com/semgrep/semgrep/issues"
 depends: [
   "ocaml" {>= "5.3.0"}
   "dune" {>= "3.5"}
-  "cpython-embed"
   "alcotest" {with-test}
 ]
+# CPython comes from toolchain/ (a dune rule that downloads the pinned
+# python-build-standalone archive, or uses PYEMBED_PREFIX). opam builds have
+# no network: publishing this package needs the archive as an extra-source
+# (PYEMBED_ARCHIVE_DIR) or an installed CPython 3.13 (PYEMBED_PREFIX).
 build: [
   ["dune" "subst"] {dev}
   ["dune" "build" "-p" name "-j" jobs "@install" "@runtest" {with-test}]

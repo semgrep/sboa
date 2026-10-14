@@ -13,10 +13,11 @@
 # Sources, in order of precedence:
 #   1. $PYEMBED_PREFIX: a CPython install tree (include/pythonX.Y/Python.h,
 #      lib/libpythonX.Y.so|.dylib, lib/pythonX.Y/). For development and tests.
-#   2. $PYEMBED_CONFIG, or $OPAM_SWITCH_PREFIX/lib/cpython-embed/cpython-embed.config:
-#      the sexp written by the cpython-embed opam package, with at least the
-#      fields (incdir ..) (libdir ..) and either (lib_file ..) (the shared
-#      library or import library, linked by full path; preferred) or
+#   2. $PYEMBED_CONFIG, or toolchain/cpython-embed.config next to this
+#      script (in dune's build directory: the file the toolchain rule
+#      generates; rules calling probe.sh must depend on it): a sexp with at
+#      least the fields (incdir ..) (libdir ..) and either (lib_file ..) (the
+#      shared library or import library, linked by full path; preferred) or
 #      (lib_name ..) (linked as -l<lib_name>); optionally (stdlib_dir ..).
 #
 # Executables get two rpaths at link time: $ORIGIN/libs (Linux) or
@@ -59,10 +60,10 @@ if [ -n "${PYEMBED_PREFIX:-}" ]; then
     python_exe=$prefix/bin/$lib_name
   fi
 else
-  config=${PYEMBED_CONFIG:-${OPAM_SWITCH_PREFIX:-/nonexistent}/lib/cpython-embed/cpython-embed.config}
+  config=${PYEMBED_CONFIG:-$(dirname "$0")/toolchain/cpython-embed.config}
   [ -f "$config" ] ||
-    die "set PYEMBED_PREFIX or install cpython-embed (looked for $config)"
-  # Windows opam prefixes contain backslashes, which are escape characters in
+    die "no $config: build toolchain/cpython-embed.config first, or set PYEMBED_PREFIX or PYEMBED_CONFIG"
+  # Windows paths may contain backslashes, which are escape characters in
   # dune sexps; gcc/mingw and CPython accept forward slashes, so normalise.
   # (Quoted sexp atoms escape a backslash as two: decode that first.)
   slashes() { printf '%s' "$1" | sed -e 's#\\\\#\\#g' -e 's#\\#/#g'; }
@@ -87,7 +88,9 @@ case "${1:-}" in
     shift
     python_exe=${PYEMBED_PYTHON:-$python_exe}
     [ -n "$python_exe" ] || die "no python_exe (config or PYEMBED_PREFIX)"
-    exec "$python_exe" "$@" ;;
+    # -B: never write __pycache__ into the toolchain tree (a dune
+    # directory target: a modified target makes dune re-run its rule).
+    exec "$python_exe" -B "$@" ;;
 esac
 
 [ $# -eq 2 ] || die "usage: probe.sh CFLAGS_SEXP LINK_SEXP"

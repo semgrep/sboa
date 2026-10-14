@@ -8,48 +8,46 @@
 ;;   Windows:        <prefix>/bin/python313.dll, vcruntime*.dll, *.pyd, ...
 ;;                   (the loader searches the executable's directory)
 ;;
-;; Which files go where is decided by the installed cpython-embed.config; the
+;; Which files go where is decided by ../toolchain/cpython-embed.config; the
 ;; two directory-target rules below populate runtime_libs/ (Linux, macOS) or
 ;; runtime_bin/ (Windows) and leave the other empty.  dune's `install` cannot
 ;; take external files, `:include`, or a glob over a directory target (it
 ;; reports a dependency cycle), so the Windows file names are listed here
 ;; explicitly.
-;; COUPLING: the Windows list must match the Windows branch of install.sh
-;; (runtime_files in cpython-embed.config).  THIRD_PARTY_NOTICES.txt (the
-;; licences of the libraries compiled into the runtime; copied by
-;; gen_runtime_files.py on every platform) is part of the list.
+;; COUPLING: the Windows list must match the Windows branch of
+;; ../toolchain/fetch.sh (runtime_files in cpython-embed.config).
+;; THIRD_PARTY_NOTICES.txt (the licences of the libraries compiled into the
+;; runtime; copied by gen_runtime_files.py on every platform) is part of the
+;; list.
 ;;
-;; Usage: this file is not a `dune` file on purpose (it needs cpython-embed
-;; installed and `(using directory-targets 0.1)` in dune-project, so it must
-;; not be picked up by builds that do not want the runtime files).  Create
-;; OSS/libs/pyembed/runtime/dune containing `(include runtime_files.dune.inc)`
-;; once pyembed's dune-project has `(using directory-targets 0.1)`.
+;; Included by runtime/dune (`(include runtime_files.dune.inc)`); the
+;; directory targets need `(using directory-targets 0.1)` in dune-project.
 
 (rule
  (targets
   (dir runtime_libs))
  (deps
-  %{lib:cpython-embed:cpython-embed.config}
+  ../toolchain/cpython-embed.config
   ../probe.sh
   gen_runtime_files.py
   THIRD_PARTY_NOTICES.txt)
  (action
-  ; the cpython-embed interpreter: no other Python is needed to build
+  ; the toolchain interpreter: no other Python is needed to build
   (run sh ../probe.sh --exec-python -I gen_runtime_files.py
-   %{lib:cpython-embed:cpython-embed.config} --layout libs --out runtime_libs)))
+   ../toolchain/cpython-embed.config --layout libs --out runtime_libs)))
 
 (rule
  (targets
   (dir runtime_bin))
  (deps
-  %{lib:cpython-embed:cpython-embed.config}
+  ../toolchain/cpython-embed.config
   ../probe.sh
   gen_runtime_files.py
   THIRD_PARTY_NOTICES.txt)
  (action
-  ; the cpython-embed interpreter: no other Python is needed to build
+  ; the toolchain interpreter: no other Python is needed to build
   (run sh ../probe.sh --exec-python -I gen_runtime_files.py
-   %{lib:cpython-embed:cpython-embed.config} --layout bin --out runtime_bin)))
+   ../toolchain/cpython-embed.config --layout bin --out runtime_bin)))
 
 (install
  (enabled_if

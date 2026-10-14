@@ -2,7 +2,7 @@
 
 (name pyembed)
 
-; opam/runtime_files.dune.inc (included by opam/dune) uses directory targets.
+; toolchain/dune and runtime/runtime_files.dune.inc use directory targets.
 
 (using directory-targets 0.1)
 

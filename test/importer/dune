@@ -11,6 +11,7 @@
 (rule
  (deps
   ../../src/cpython/cflags.sexp
+  ../../toolchain/cpython-embed.config
   (env_var PYEMBED_PREFIX)
   (env_var PYEMBED_CONFIG))
  (action
@@ -22,6 +23,7 @@
  (targets frozen.c)
  (deps
   ../../src/cpython/cflags.sexp
+  ../../toolchain/cpython-embed.config
   (:tool ../../tools/pyembed_bundle.py)
   (:importer ../../python/_pyembed_importer.py)
   (env_var PYEMBED_PREFIX)
@@ -44,6 +46,7 @@
  (targets demo_bundle.ml demo_bundle.zip demo_bundle_blob.c)
  (deps
   ../../src/cpython/cflags.sexp
+  ../../toolchain/cpython-embed.config
   (:tool ../../tools/pyembed_bundle.py)
   (source_tree demopkg)
   (env_var PYEMBED_PREFIX)

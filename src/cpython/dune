@@ -25,30 +25,16 @@
  (c_library_flags
   (:include link.sexp)))
 
-; Link flags from the installed cpython-embed package: depend on its config so
-; reinstalling CPython regenerates them.
+; Link flags for the CPython described by toolchain/cpython-embed.config
+; (probe.sh reads it; PYEMBED_PREFIX / PYEMBED_CONFIG override it).
 
 (rule
  (targets cflags.sexp link.sexp)
- (enabled_if %{lib-available:cpython-embed})
  (deps
   (:probe %{project_root}/probe.sh)
-  %{lib:cpython-embed:cpython-embed.config}
+  %{project_root}/toolchain/cpython-embed.config
   (env_var PYEMBED_PREFIX)
   (env_var PYEMBED_CONFIG)
   (env_var PYEMBED_NO_LIBDIR_RPATH))
- (action
-  (run sh %{probe} %{targets})))
-
-; Without the package (PYEMBED_PREFIX / PYEMBED_CONFIG development setups),
-; the inputs are outside dune's view: re-probe on every build.
-
-(rule
- (targets cflags.sexp link.sexp)
- (enabled_if
-  (not %{lib-available:cpython-embed}))
- (deps
-  (:probe %{project_root}/probe.sh)
-  (universe))
  (action
   (run sh %{probe} %{targets})))

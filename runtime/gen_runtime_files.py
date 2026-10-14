@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Install helper for cpython-embed's runtime files.
 
-``cpython-embed.config`` (written by the cpython-embed-<platform> opam
-packages) lists, in ``runtime_files``, the files that must sit next to the
-final executable: the shared library and the extension modules.
+``cpython-embed.config`` (written by ../toolchain/fetch.sh) lists, in
+``runtime_files``, the files that must sit next to the final executable: the
+shared library and the extension modules.
 ``gen_runtime_files.py CONFIG --layout libs|bin --out DIR`` copies them into
 DIR (modes preserved) when the platform's layout matches, and creates an empty
 DIR otherwise.  Run as the action of a dune rule with ``(targets (dir DIR))``

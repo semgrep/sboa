@@ -33,7 +33,6 @@
 
 (rule
  (targets frozen.c)
- (deps %{lib:cpython-embed:cpython-embed.config})
  (action
   (run
    sh
@@ -42,7 +41,7 @@
    -I
    %{dep:../tools/pyembed_bundle.py}
    --cpython-config
-   %{lib:cpython-embed:cpython-embed.config}
+   %{dep:../toolchain/cpython-embed.config}
    freeze
    --module
    _pyembed_importer=%{dep:../python/_pyembed_importer.py}

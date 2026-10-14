@@ -1,0 +1,25 @@
+; The CPython that pyembed embeds (see fetch.sh): the python-build-standalone
+; archive that pbs.json pins for the OCaml target, downloaded once into
+; cache/ (git-ignored; PYEMBED_ARCHIVE_DIR overrides it for offline builds),
+; sha256-checked and staged in prefix/, or an installed CPython when
+; PYEMBED_PREFIX is set. cpython-embed.config describes it; every rule that
+; needs CPython (pyembed.cpython's link flags, the stdlib bundle, the frozen
+; table, the runtime files, applications' bundles) depends on that file.
+;
+; This rule is the only one that touches the network, and only when the
+; archive is not cached yet. It runs outside opam (`make` drives dune), so
+; there is no opam package for CPython and no per-platform lockfile entry.
+
+(dirs :standard \ cache)
+
+(rule
+ (targets
+  cpython-embed.config
+  (dir prefix))
+ (deps
+  pbs.json
+  fetch.sh
+  (env_var PYEMBED_PREFIX)
+  (env_var CPYTHON_EMBED_MAGIC))
+ (action
+  (run sh fetch.sh %{ocaml-config:target} pbs.json . %{workspace_root})))

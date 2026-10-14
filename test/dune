@@ -1,12 +1,12 @@
 ; Tests for pyembed. `make -C OSS/libs/pyembed test` runs them; so does any
 ; @runtest that reaches this directory. The CPython they use is the one
-; pyembed.cpython links (probe.sh: the installed cpython-embed package, or
+; pyembed.cpython links (probe.sh: ../toolchain/cpython-embed.config, or
 ; PYEMBED_PREFIX / PYEMBED_CONFIG; PYEMBED_PYTHON overrides the interpreter
 ; that compiles the test's frozen table). The tests have no stdlib bundle:
 ; they put the stdlib directory (PYEMBED_STDLIB) on sys.path.
 ;
 ; ../src/cpython/cflags.sexp stands for "the CPython in use" in the deps
-; below: it is regenerated when the cpython-embed config changes.
+; below: it is regenerated when the toolchain config changes.
 
 (rule
  (copy ../src/cpython/cflags.sexp cflags.sexp))
@@ -14,6 +14,7 @@
 (rule
  (deps
   ../src/cpython/cflags.sexp
+  ../toolchain/cpython-embed.config
   (env_var PYEMBED_PREFIX)
   (env_var PYEMBED_CONFIG))
  (action
@@ -28,6 +29,7 @@
  (targets frozen.c)
  (deps
   ../src/cpython/cflags.sexp
+  ../toolchain/cpython-embed.config
   (:tool ../tools/pyembed_bundle.py)
   (:probe frozen_probe.py)
   (env_var PYEMBED_PREFIX)
