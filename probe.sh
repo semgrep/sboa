@@ -35,7 +35,8 @@ sexp_field() {
 }
 
 incdir=""; libdir=""; lib_name=""; lib_file=""; stdlib_dir=""; python_exe=""
-here=$(dirname "$0")
+# A Windows caller may pass a backslash path (dune's %{lib:sboa:probe.sh}).
+here=$(dirname "$(printf '%s' "$0" | tr '\134' '/')")
 if [ -n "${SBOA_CONFIG:-}" ]; then
   config=$SBOA_CONFIG
 elif [ -f "$here/sboa.config" ]; then
