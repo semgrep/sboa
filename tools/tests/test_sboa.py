@@ -143,6 +143,8 @@ def sample(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Path]:
             "gcc",
             "-shared",
             "-fPIC",
+            # macOS: Python symbols resolve from the loading process
+            *(["-undefined", "dynamic_lookup"] if sys.platform == "darwin" else []),
             f"-I{sysconfig.get_paths()['include']}",
             str(c),
             "-o",

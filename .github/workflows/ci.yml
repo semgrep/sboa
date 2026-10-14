@@ -79,4 +79,6 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
       - name: Bundle-tool tests
         if: runner.os != 'Windows'
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
         run: uv run --no-project --python 3.13 --with pytest python -m pytest tools/tests -q
