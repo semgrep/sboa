@@ -20,7 +20,7 @@
 ;; Usage: this file is not a `dune` file on purpose (it needs cpython-embed
 ;; installed and `(using directory-targets 0.1)` in dune-project, so it must
 ;; not be picked up by builds that do not want the runtime files).  Create
-;; OSS/libs/pyembed/opam/dune containing `(include runtime_files.dune.inc)`
+;; OSS/libs/pyembed/runtime/dune containing `(include runtime_files.dune.inc)`
 ;; once pyembed's dune-project has `(using directory-targets 0.1)`.
 
 (rule

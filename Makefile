@@ -6,7 +6,7 @@
 # development, from PYEMBED_PREFIX (an install tree with include/python3.X,
 # lib/libpython3.X.so and lib/python3.X/). See probe.sh.
 #
-# `build` and `test` only touch src/ and test/: opam/dune (the runtime-file
+# `build` and `test` only touch src/ and test/: runtime/dune (the runtime-file
 # install stanzas) needs cpython-embed installed in the switch, so it is only
 # built by `install`.
 

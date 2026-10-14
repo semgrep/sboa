@@ -35,8 +35,9 @@ sexp_field() {
 incdir=""; libdir=""; lib_name=""; lib_file=""; stdlib_dir=""; python_exe=""
 if [ -n "${PYEMBED_PREFIX:-}" ]; then
   prefix=$PYEMBED_PREFIX
-  incdir=$(ls -d "$prefix"/include/python3.* 2>/dev/null | head -n 1) ||
-    die "no include/python3.* under $prefix"
+  for d in "$prefix"/include/python3.*; do
+    [ -d "$d" ] && incdir=$d && break
+  done
   [ -n "$incdir" ] || die "no include/python3.* under $prefix"
   lib_name=$(basename "$incdir")      # e.g. python3.13
   libdir=$prefix/lib
@@ -72,10 +73,10 @@ esac
 [ $# -eq 2 ] || die "usage: probe.sh CFLAGS_SEXP LINK_SEXP"
 [ -f "$incdir/Python.h" ] || die "$incdir/Python.h not found"
 
+# shellcheck disable=SC2016 # $ORIGIN is for the dynamic linker, not the shell
 case $(uname -s) in
   Darwin) rpath='-Wl,-rpath,@loader_path/libs' ;;
   MINGW*|MSYS*|CYGWIN*) rpath='' ;;            # DLLs live next to the exe
-  # shellcheck disable=SC2016 # $ORIGIN is for the dynamic linker, not the shell
   *) rpath='-Wl,-rpath,$ORIGIN/libs' ;;
 esac
 
