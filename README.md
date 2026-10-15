@@ -1,3 +1,5 @@
+WARNING: ALL SLOP RIGHT NOW
+
 # sboa
 
 sboa ("Sand Boa"; formerly `pyembed`) embeds CPython 3.13 in an OCaml
