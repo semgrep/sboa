@@ -116,4 +116,6 @@ jobs:
       - name: Build and test
         run: |
           opam exec -- dune build @install @runtest
-          grep -F "$(uv python dir)" _build/default/config/sboa.config
+          found=$(sed -n 's/^ *(python_exe "\(.*\)")$/\1/p' _build/default/config/sboa.config)
+          echo "python_exe: $found; uv python find: $(uv python find --system 3.13)"
+          [ "$found" = "$(uv python find --system 3.13)" ]
