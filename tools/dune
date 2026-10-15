@@ -1,7 +1,59 @@
-; The bundle tool, installed into lib/sboa/ (%{lib:sboa:sboa_bundle.py} in
-; applications' dune rules). Its tests (tests/) are run with pytest.
+; sboa-bundle: the launcher of the bundle tool and the configurator
+; (launcher.ml). sboa's own build runs `sboa-bundle discover` to find the
+; CPython it builds against (SBOA_PYTHON, SBOA_PREFIX, python3.13 on PATH,
+; `uv python find`, python3 if it is 3.13; see ../README.md), which writes:
+;
+;   sboa.config  the installation (paths, version, the runtime files an
+;                application ships), installed into lib/sboa/ next to the
+;                script: the interpreter of every other subcommand that is
+;                given no --config
+;   cflags.sexp  -I of the headers, for the library's C stubs
+;   clibs.sexp   the library's c_library_flags: empty, except the import
+;                library on Windows (bound by DLL name, not path)
+;   link.sexp    libpython and rpaths, for sboa's own test executables only:
+;                an application links the CPython it ships
+;
+; The config records the interpreter's sys.version and libpython's size and
+; mtime, and the globs below track the prefix's interpreter and libpython, so
+; an upgraded installation re-runs the rule and everything downstream.
+;
+; (sandbox none): the outputs record absolute paths of the CPython
+; installation and depend on the environment; user rules are not stored in
+; dune's shared cache by default (keep it that way).
+
+(executable
+ (name launcher)
+ (public_name sboa-bundle)
+ (package sboa)
+ (modules launcher)
+ (libraries unix)
+ ; inside a dune workspace the launcher runs the sboa_bundle.py next to it
+ (link_deps sboa_bundle.py))
+
+(rule
+ (targets sboa.config cflags.sexp clibs.sexp link.sexp)
+ (deps
+  sboa_bundle.py
+  (env_var SBOA_PREFIX)
+  (env_var SBOA_PYTHON)
+  (env_var UV_PYTHON_INSTALL_DIR)
+  (glob_files %{env:SBOA_PREFIX=/nonexistent}/bin/python3*)
+  (glob_files %{env:SBOA_PREFIX=/nonexistent}/lib/libpython3*)
+  (sandbox none))
+ (action
+  (run
+   %{exe:launcher.exe}
+   discover
+   --out
+   sboa.config
+   --cflags
+   cflags.sexp
+   --clibs
+   clibs.sexp
+   --link
+   link.sexp)))
 
 (install
  (section lib)
  (package sboa)
- (files sboa_bundle.py))
+ (files sboa_bundle.py sboa.config))

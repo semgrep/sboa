@@ -1,0 +1,11 @@
+# The CPython 3.13 headers and shared libpython sboa builds against, where
+# the OS packages a 3.13 (elsewhere: `uv python install 3.13`, or
+# SBOA_PREFIX; see README.md).
+depexts: [
+  ["python3.13-dev"] {os-distribution = "debian" & os-version >= "13"}
+  ["python3.13-dev"] {os-distribution = "ubuntu" & os-version >= "25.04"}
+  ["python3-dev"] {os-distribution = "alpine"}
+  ["python3.13-devel"] {os-family = "fedora"}
+  ["python"] {os-family = "arch"}
+  ["python@3.13"] {os = "macos" & os-distribution = "homebrew"}
+]

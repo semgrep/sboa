@@ -24,7 +24,7 @@ in
     pkgs.gnumake
   ];
 
-  # The CPython for toolchain/find_python.sh (see README.md).
+  # The CPython sboa builds against (`sboa-bundle discover`; see README.md).
   env.SBOA_PREFIX = "${python}";
 
   enterShell = ''

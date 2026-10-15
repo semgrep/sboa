@@ -1,0 +1,152 @@
+; The application recipe of ../../README.md ("Using sboa from dune"), as an
+; application would write it with an installed sboa, except for the config:
+; this test ships the CPython sboa was built against (%{lib:sboa:sboa.config});
+; an application usually describes its own (`sboa-bundle describe`). Only
+; the install stanzas of rule 3 are missing (they would install into the
+; sboa package); the test assembles the installed layout itself.
+
+; 1. The frozen-module table: the bundle importer and the `encodings`
+; package interpreter start-up needs, plus a module whose initialization
+; links the table into every executable (hence -linkall).
+
+(rule
+ (targets frozen.c frozen.ml)
+ (action
+  (run
+   %{bin:sboa-bundle}
+   --config
+   %{lib:sboa:sboa.config}
+   freeze
+   --module
+   _sboa_importer=%{lib:sboa:_sboa_importer.py}
+   --stdlib-package
+   encodings
+   --out
+   frozen.c
+   --ml
+   frozen.ml)))
+
+(library
+ (name recipe_frozen)
+ (modules frozen)
+ (libraries sboa)
+ (library_flags -linkall)
+ (foreign_stubs
+  (language c)
+  (names frozen)))
+
+; 2. The standard library, compiled to bytecode and embedded in the
+; executable, registered at priority 0 (before every application bundle).
+
+(rule
+ (targets
+  stdlib_bundle.zip
+  stdlib_bundle_blob.c
+  stdlib_bundle.ml
+  stdlib_bundle.mli)
+ (action
+  (run
+   %{bin:sboa-bundle}
+   --config
+   %{lib:sboa:sboa.config}
+   stdlib
+   --priority
+   0
+   --target-system
+   %{system}
+   --mli
+   --out
+   .)))
+
+(library
+ (name recipe_stdlib)
+ (modules stdlib_bundle)
+ (libraries sboa)
+ (library_flags -linkall)
+ (foreign_stubs
+  (language c)
+  (names stdlib_bundle_blob)
+  (extra_deps stdlib_bundle.zip)))
+
+; 3. The runtime files, staged for the platform's layout (an empty directory
+; target is an error, hence the enabled_ifs).
+
+(rule
+ (enabled_if
+  (<> %{os_type} Win32))
+ (targets
+  (dir runtime_libs))
+ (action
+  (run
+   %{bin:sboa-bundle}
+   --config
+   %{lib:sboa:sboa.config}
+   runtime-files
+   --layout
+   libs
+   --out
+   runtime_libs)))
+
+(rule
+ (enabled_if
+  (= %{os_type} Win32))
+ (targets
+  (dir runtime_bin))
+ (action
+  (run
+   %{bin:sboa-bundle}
+   --config
+   %{lib:sboa:sboa.config}
+   runtime-files
+   --layout
+   bin
+   --out
+   runtime_bin)))
+
+; Linking libpython: the application's business.
+
+(rule
+ (with-stdout-to
+  link.sexp
+  (run %{bin:sboa-bundle} --config %{lib:sboa:sboa.config} flags --link)))
+
+(executable
+ (name recipe_prog)
+ (modules recipe_prog)
+ (libraries sboa recipe_frozen recipe_stdlib)
+ (link_flags
+  (:include link.sexp)))
+
+; Run it as shipped: bin/recipe_prog.exe with the runtime files in bin/libs/
+; (libpython is found there through the $ORIGIN/libs rpath, extension
+; modules such as zlib, outside libpython in some builds, through the
+; importer). On Windows the DLLs are found on PATH, the extension modules
+; are built in.
+
+(rule
+ (enabled_if
+  (<> %{os_type} Win32))
+ (targets
+  (dir dist))
+ (deps runtime_libs recipe_prog.exe)
+ (action
+  (progn
+   (run mkdir -p dist/bin)
+   (run cp -R runtime_libs dist/bin/libs)
+   (run cp recipe_prog.exe dist/bin/recipe_prog.exe))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (<> %{os_type} Win32))
+ (deps dist)
+ (action
+  (run dist/bin/recipe_prog.exe)))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{os_type} Win32))
+ (deps runtime_bin)
+ (action
+  (run %{exe:recipe_prog.exe})))
