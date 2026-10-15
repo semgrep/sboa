@@ -78,7 +78,7 @@ jobs:
         shell: bash
         run: |
           opam exec -- dune build @install @runtest
-          grep python_exe _build/default/config/sboa.config
+          grep python_exe _build/default/tools/sboa.config
       # The full bundle-tool suite needs a CPython with the stdlib extension
       # modules built in (python-build-standalone, which uv installs).
       - name: Set up uv
@@ -116,6 +116,6 @@ jobs:
       - name: Build and test
         run: |
           opam exec -- dune build @install @runtest
-          found=$(sed -n 's/^ *(python_exe "\(.*\)")$/\1/p' _build/default/config/sboa.config)
+          found=$(sed -n 's/^ *(python_exe "\(.*\)")$/\1/p' _build/default/tools/sboa.config)
           echo "python_exe: $found; uv python find: $(uv python find --system 3.13)"
           [ "$found" = "$(uv python find --system 3.13)" ]
