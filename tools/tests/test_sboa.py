@@ -663,7 +663,8 @@ def test_freeze_table(tmp_path: Path) -> None:
         str(out),
     )
     c = out.read_text()
-    assert "const struct _frozen sboa_frozen_table[] = {" in c
+    assert "const struct sboa_frozen_entry sboa_frozen_table[] = {" in c
+    assert "#include" not in c  # no Python.h: compiles without CPython flags
     assert '{"_sboa_importer", sboa_frozen_' in c
     assert '{"encodings", ' in c and ", 1}," in c  # is_package flag
     assert '{"encodings.utf_8", ' in c

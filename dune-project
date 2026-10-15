@@ -2,7 +2,7 @@
 
 (name sboa)
 
-; runtime/dune uses directory targets (and so do applications' runtime-file
+; test/recipe uses directory targets (and so do applications' runtime-file
 ; stanzas, see README.md).
 
 (using directory-targets 0.1)
@@ -22,8 +22,9 @@
  (name sboa)
  (synopsis "Embed CPython in an OCaml executable")
  (description
-  "sboa (Sand Boa) links a CPython 3.13 shared library into an OCaml program and exposes a small, explicit bridge: a GIL token, owned Python object handles with deferred reference release, fallible typed conversions, OCaml functions and classes exported as builtin Python modules, and exception translation in both directions. sboa.stdlib compiles the standard library into the executable and sboa.frozen holds the frozen bundle importer. sboa never downloads CPython: an installed CPython 3.13 with a shared libpython must be provided at build time (SBOA_PREFIX=<installation prefix>, SBOA_PYTHON=<interpreter>, or python3.13 on PATH).")
+  "sboa (Sand Boa) links a CPython 3.13 shared library into an OCaml program and exposes a small, explicit bridge: a GIL token, owned Python object handles with deferred reference release, fallible typed conversions, OCaml functions and classes exported as builtin Python modules, and exception translation in both directions. The sboa-bundle tool builds what an application ships with it: the frozen-module table, the embedded standard library and application bundles, the runtime files. sboa never downloads CPython: it finds an installed CPython 3.13 with a shared libpython at build time (SBOA_PYTHON, SBOA_PREFIX, python3.13 on PATH, `uv python find 3.13`, or a python3 that is 3.13).")
  (depends
   (ocaml
    (>= 5.3))
+  dune-configurator
   (alcotest :with-test)))

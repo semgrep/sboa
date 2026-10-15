@@ -2,6 +2,25 @@
 
 ## unreleased
 
+- sboa builds curl-style: `config/discover.ml` (dune-configurator) finds the
+  CPython 3.13 (`SBOA_PYTHON`, `SBOA_PREFIX`, `python3.13` on `PATH`,
+  `uv python find 3.13`, `python3` if it is 3.13) and writes `sboa.config`;
+  the opam file declares the CPython 3.13 dev package as a depext where an
+  OS has one. `toolchain/find_python.sh`, `toolchain/describe.py` and
+  `probe.sh` are gone (with `SBOA_CONFIG` and `SBOA_NO_LIBDIR_RPATH`): the
+  tool's new `describe`, `flags` and `exec` subcommands cover them.
+- The `sboa` library no longer links libpython (except the import library
+  on Windows): the application links the CPython it ships
+  (`sboa-bundle flags --link`).
+- `sboa.stdlib` and `sboa.frozen` are gone: an application builds its stdlib
+  bundle and frozen table against the CPython it ships, with the recipe of
+  the README (`freeze --ml` writes the module that links the table). The
+  installed `sboa-bundle` executable runs the tool under sboa's CPython;
+  `_sboa_importer.py` is installed into `lib/sboa/`.
+- `sboa.config` loses the fields nothing read (`magic` and `SBOA_MAGIC`,
+  `prefix`, `lib_name`, `libdynload_dir`, `runtime_libdynload`). `freeze`
+  output no longer includes `Python.h`.
+
 - First release as a standalone repository (formerly `pyembed` inside the
   Semgrep monorepo). sboa no longer downloads CPython: it builds against an
   installed CPython 3.13 (`SBOA_PREFIX`, `SBOA_PYTHON`, or `python3.13` on

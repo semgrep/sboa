@@ -23,7 +23,7 @@
 open Sboa
 
 (* The stdlib directory of the CPython the test is linked with, from the
-   dune rule (probe.sh --print-stdlib). *)
+   dune rule (sboa-bundle exec). *)
 let stdlib = Sys.getenv "SBOA_STDLIB"
 
 let config () =

@@ -10,9 +10,10 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
 # LICENSE for more details.
 #
-"""Tests for toolchain/describe.py: the runtime-file listings (on fake
-installation trees, so the Windows layout is covered everywhere) and a real
-run against the interpreter running the tests."""
+"""Tests for ``sboa_bundle.py describe``, ``flags`` and ``exec``: the
+runtime-file listings (on fake installation trees, so the Windows layout is
+covered everywhere) and real runs against the interpreter running the tests."""
+
 import importlib.util
 import subprocess
 import sys
@@ -23,7 +24,6 @@ from types import ModuleType
 import pytest
 
 SBOA_DIR = Path(__file__).resolve().parents[2]
-DESCRIBE = SBOA_DIR / "toolchain" / "describe.py"
 TOOL = SBOA_DIR / "tools" / "sboa_bundle.py"
 
 
@@ -35,7 +35,7 @@ def load(path: Path) -> ModuleType:
     return mod
 
 
-describe = load(DESCRIBE)
+describe = load(TOOL)
 
 
 def touch(root: Path, *names: str) -> None:
@@ -79,7 +79,7 @@ def test_windows_runtime_files(tmp_path: Path) -> None:
 
 def test_windows_runtime_files_needs_the_dll(tmp_path: Path) -> None:
     touch(tmp_path, "python.exe", "python3.dll")
-    with pytest.raises(describe.DescribeError):
+    with pytest.raises(describe.ToolError):
         describe.windows_runtime_files(str(tmp_path))
 
 
@@ -108,12 +108,26 @@ def test_unix_runtime_files(tmp_path: Path) -> None:
 def test_check_value() -> None:
     assert describe.check_value("x", "/a/b c") == "/a/b c"
     for bad in ['a"b', "a)b", "a\\b"]:
-        with pytest.raises(describe.DescribeError):
+        with pytest.raises(describe.ToolError):
             describe.check_value("x", bad)
     # a CR (CRLF command output), and Cygwin's rendering of one in a file name
     for bad in ["C:/x/_opam\r/cpython", "C:/x/_opam\uf00d/cpython"]:
-        with pytest.raises(describe.DescribeError, match="control character"):
+        with pytest.raises(describe.ToolError, match="control character"):
             describe.check_value("prefix", bad)
+
+
+def test_link_flags() -> None:
+    cfg = {"lib_file": "/p/lib/libpython3.13.so.1.0", "libdir": "/p/lib"}
+    linux = describe.link_items({**cfg, "platform": "linux-gnu-x86_64"})
+    assert linux == [
+        ("lib", "/p/lib/libpython3.13.so.1.0"),
+        ("opt", "'-Wl,-rpath,$ORIGIN/libs'"),
+        ("opt", "-Wl,-rpath,/p/lib"),
+    ]
+    macos = describe.link_items({**cfg, "platform": "macos-arm64"})
+    assert macos[1] == ("opt", "-Wl,-rpath,@loader_path/libs")
+    win = {"lib_file": "C:/p/libs/python313.lib", "platform": "windows-x86_64"}
+    assert describe.link_items(win) == [("lib", "C:/p/libs/python313.lib")]
 
 
 def shared_cpython_313() -> bool:
@@ -129,37 +143,68 @@ def shared_cpython_313() -> bool:
     not shared_cpython_313(), reason="needs a CPython 3.13 with a shared libpython"
 )
 def test_describe_this_interpreter(tmp_path: Path) -> None:
-    out = tmp_path / "out"
+    cfg_file = tmp_path / "out" / "sboa.config"
     r = subprocess.run(
         [
             sys.executable,
             "-I",
-            "-B",
-            str(DESCRIBE),
-            "--python",
-            sys.executable,
+            str(TOOL),
+            "describe",
             "--prefix",
             sys.base_prefix,
             "--out",
-            str(out),
+            str(cfg_file),
         ],
         capture_output=True,
         text=True,
     )
     assert r.returncode == 0, r.stderr
-    gen = load(TOOL)
-    cfg = gen.read_sboa_config(out / "sboa.config")
+    cfg = describe.read_sboa_config(cfg_file)
     assert cfg["version"].startswith("3.13.")
-    assert int(cfg["magic"]) == int.from_bytes(
-        importlib.util.MAGIC_NUMBER[:2], "little"
-    )
     assert Path(cfg["incdir"], "Python.h").is_file()
     assert Path(cfg["lib_file"]).exists()
+    assert Path(cfg["python_exe"]).is_file()
     assert cfg["runtime_subdir"] == "libs"
-    entries = gen.runtime_entries(cfg)
+    entries = describe.runtime_entries(cfg)
     assert entries and all(Path(src).is_file() for src, _ in entries)
     staged = tmp_path / "staged"
-    assert gen.stage(cfg, "libs", str(staged))
+    assert describe.stage(cfg, "libs", str(staged))
     for _, dest in entries:
         assert (staged / dest).is_file()
-    assert not gen.stage(cfg, "bin", str(tmp_path / "empty"))
+    assert not describe.stage(cfg, "bin", str(tmp_path / "empty"))
+
+    def tool(*args: str) -> str:
+        r = subprocess.run(
+            [sys.executable, "-I", str(TOOL), *args], capture_output=True, text=True
+        )
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+
+    assert tool("flags", "--config", str(cfg_file), "--cflags") == (
+        f'("-I{cfg["incdir"]}")\n'
+    )
+    link = tool("--config", str(cfg_file), "flags", "--link")
+    assert link.startswith(f'("-cclib" "{cfg["lib_file"]}" "-ccopt" ')
+    out = tool(
+        "exec", "--config", str(cfg_file), "--", "-c", "import sys; print(sys.prefix)"
+    )
+    assert out.strip() == sys.base_prefix
+
+
+def test_describe_refuses_a_prefix_without_python(tmp_path: Path) -> None:
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(TOOL),
+            "describe",
+            "--prefix",
+            str(tmp_path),
+            "--out",
+            str(tmp_path / "c"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 1
+    assert "has no bin/python3.13, bin/python3 or python.exe" in r.stderr

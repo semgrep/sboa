@@ -1,6 +1,6 @@
 # Build and test sboa. The CPython 3.13 it builds against is found by
-# toolchain/find_python.sh: SBOA_PYTHON=<interpreter>, SBOA_PREFIX=<prefix>,
-# or python3.13 / python3 on PATH (see README.md).
+# config/discover.ml (SBOA_PYTHON, SBOA_PREFIX, python3.13 on PATH,
+# `uv python find 3.13`, python3 if it is 3.13; see README.md).
 
 DUNE ?= dune
 PYTHON ?= python3
@@ -9,7 +9,7 @@ PYTHON ?= python3
 all:
 	$(DUNE) build @install
 
-# The alcotest suites, the importer test and the runtime-file smoke test.
+# The alcotest suites, the importer test and the application recipe.
 .PHONY: test
 test:
 	$(DUNE) test --force

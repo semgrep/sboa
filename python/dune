@@ -1,0 +1,8 @@
+; The bundle importer, frozen into an application's frozen-module table
+; (`sboa-bundle freeze --module _sboa_importer=%{lib:sboa:_sboa_importer.py}`,
+; see ../README.md).
+
+(install
+ (section lib)
+ (package sboa)
+ (files _sboa_importer.py))

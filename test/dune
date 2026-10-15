@@ -1,48 +1,41 @@
-; Tests for sboa. `make test` runs them; so does any
-; @runtest that reaches this directory. The CPython they use is the one
-; sboa links (probe.sh: ../toolchain/sboa.config, or
-; SBOA_CONFIG; SBOA_PYTHON overrides the interpreter
-; that compiles the test's frozen table). The tests have no stdlib bundle:
-; they put the stdlib directory (SBOA_STDLIB) on sys.path.
-;
-; ../src/cflags.sexp stands for "the CPython in use" in the deps
-; below: it is regenerated when the toolchain config changes.
+; Tests for sboa. `make test` runs them; so does any @runtest that reaches
+; this directory. The CPython they use is the one sboa was built against
+; (../config/sboa.config); they link it with ../config/link.sexp. The tests
+; have no stdlib bundle: they put the stdlib directory (SBOA_STDLIB) on
+; sys.path (recipe/ is the test with the bundles an application builds).
 
 (rule
- (copy ../src/cflags.sexp cflags.sexp))
+ (copy ../config/cflags.sexp cflags.sexp))
 
 (rule
- (deps
-  ../src/cflags.sexp
-  ../toolchain/sboa.config
-  (env_var SBOA_CONFIG))
- (action
-  (with-stdout-to
-   stdlib_dir
-   (run sh %{dep:../probe.sh} --print-stdlib))))
+ (copy ../config/link.sexp link.sexp))
+
+(rule
+ (with-stdout-to
+  stdlib_dir
+  (run
+   %{bin:sboa-bundle}
+   exec
+   --config
+   %{dep:../config/sboa.config}
+   --
+   -I
+   -c
+   "import sysconfig; print(sysconfig.get_path('stdlib'))")))
 
 ; A real frozen table (strong symbols overriding sboa's weak empty
 ; table), produced by the bundle tool's `freeze` subcommand.
 
 (rule
  (targets frozen.c)
- (deps
-  ../src/cflags.sexp
-  ../toolchain/sboa.config
-  (:tool ../tools/sboa_bundle.py)
-  (:probe frozen_probe.py)
-  (env_var SBOA_CONFIG)
-  (env_var SBOA_PYTHON))
  (action
   (run
-   sh
-   %{dep:../probe.sh}
-   --exec-python
-   -I
-   %{tool}
+   %{bin:sboa-bundle}
+   --config
+   %{dep:../config/sboa.config}
    freeze
    --module
-   _sboa_frozen_probe=%{probe}
+   _sboa_frozen_probe=%{dep:frozen_probe.py}
    --out
    %{targets})))
 
@@ -56,6 +49,8 @@
   (<> %{os_type} Win32))
  (modules test_sboa)
  (libraries sboa alcotest threads.posix unix)
+ (link_flags
+  (:include link.sexp))
  (foreign_stubs
   (language c)
   (names test_blob frozen)
@@ -74,4 +69,6 @@
 (executable
  (name exit_prog)
  (modules exit_prog)
+ (link_flags
+  (:include link.sexp))
  (libraries sboa unix))
