@@ -15,9 +15,9 @@ executable. It is a dune virtual library (`sboa`) with two implementations:
 | `sboa.toolchain` | facts about the CPython an executable was built against (version, platform, its `lib-dynload` directory) |
 
 plus the build-time tools `sboa_bundle.py` (Python bundles, the frozen table,
-the seam check), `probe.sh` (C and link flags, the build-time
-interpreter) and `gen_runtime_files.py` (stages the files an application ships
-next to its executable). Nothing here is specific to an application.
+the seam check, the wheel fetch, the runtime files an application ships next
+to its executable) and `probe.sh` (C and link flags, the build-time
+interpreter). Nothing here is specific to an application.
 
 Supported: Linux (glibc and musl) and macOS on x86_64 and arm64, Windows
 x86_64 with the mingw-w64 OCaml port (gcc; MSVC is not supported). OCaml 5.3
@@ -84,8 +84,8 @@ sboa. On Windows the DLLs live next to the `.exe`.
 
 ## Using sboa from dune
 
-An installed sboa puts `sboa.config`, `probe.sh`, `sboa_bundle.py` and
-`gen_runtime_files.py` in `lib/sboa/`; dune rules reference them as
+An installed sboa puts `sboa.config`, `probe.sh` and `sboa_bundle.py` in
+`lib/sboa/`; dune rules reference them as
 `%{lib:sboa:...}` (which also makes them dependencies). `SBOA_CONFIG`
 overrides the config `probe.sh` reads.
 
@@ -127,8 +127,8 @@ Windows):
  (enabled_if (<> %{os_type} Win32))
  (targets (dir runtime_libs))
  (action
-  (run sh %{lib:sboa:probe.sh} --exec-python -I
-   %{lib:sboa:gen_runtime_files.py} %{lib:sboa:sboa.config}
+  (run sh %{lib:sboa:probe.sh} --exec-python -I %{lib:sboa:sboa_bundle.py}
+   --config %{lib:sboa:sboa.config} runtime-files
    --layout libs --out runtime_libs)))
 
 (install
@@ -141,8 +141,8 @@ Windows):
  (enabled_if (= %{os_type} Win32))
  (targets (dir runtime_bin))
  (action
-  (run sh %{lib:sboa:probe.sh} --exec-python -I
-   %{lib:sboa:gen_runtime_files.py} %{lib:sboa:sboa.config}
+  (run sh %{lib:sboa:probe.sh} --exec-python -I %{lib:sboa:sboa_bundle.py}
+   --config %{lib:sboa:sboa.config} runtime-files
    --layout bin --out runtime_bin
    --check-install-list %{dep:dune})))
 

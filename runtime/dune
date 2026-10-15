@@ -1,15 +1,9 @@
-; gen_runtime_files.py stages the runtime files listed in sboa.config into a
-; directory target, which an application installs next to its executables;
-; see ../README.md for the stanzas. Installed into lib/sboa/ (%{lib:sboa:gen_runtime_files.py}).
-
-(install
- (section lib)
- (package sboa)
- (files gen_runtime_files.py))
-
-; Smoke test: stage this platform's layout (an empty directory target is an
-; error, so only the layout of the platform is ever built; applications'
-; install stanzas carry the same enabled_if).
+; Smoke test of `sboa_bundle.py runtime-files`, which stages the runtime
+; files listed in sboa.config into a directory target that an application
+; installs next to its executables (see ../README.md for the stanzas): stage
+; this platform's layout (an empty directory target is an error, so only the
+; layout of the platform is ever built; applications' install stanzas carry
+; the same enabled_if).
 
 (rule
  (enabled_if
@@ -23,8 +17,10 @@
    ../probe.sh
    --exec-python
    -I
-   %{dep:gen_runtime_files.py}
+   %{dep:../tools/sboa_bundle.py}
+   --config
    ../toolchain/sboa.config
+   runtime-files
    --layout
    libs
    --out
@@ -42,8 +38,10 @@
    ../probe.sh
    --exec-python
    -I
-   %{dep:gen_runtime_files.py}
+   %{dep:../tools/sboa_bundle.py}
+   --config
    ../toolchain/sboa.config
+   runtime-files
    --layout
    bin
    --out

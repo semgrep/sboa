@@ -24,7 +24,7 @@ import pytest
 
 SBOA_DIR = Path(__file__).resolve().parents[2]
 DESCRIBE = SBOA_DIR / "toolchain" / "describe.py"
-GEN_RUNTIME_FILES = SBOA_DIR / "runtime" / "gen_runtime_files.py"
+TOOL = SBOA_DIR / "tools" / "sboa_bundle.py"
 
 
 def load(path: Path) -> ModuleType:
@@ -143,8 +143,8 @@ def test_describe_this_interpreter(tmp_path: Path) -> None:
         text=True,
     )
     assert r.returncode == 0, r.stderr
-    gen = load(GEN_RUNTIME_FILES)
-    cfg = gen.load_config(str(out / "sboa.config"))
+    gen = load(TOOL)
+    cfg = gen.read_sboa_config(out / "sboa.config")
     assert cfg["version"].startswith("3.13.")
     assert int(cfg["magic"]) == int.from_bytes(
         importlib.util.MAGIC_NUMBER[:2], "little"
