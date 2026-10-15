@@ -110,6 +110,10 @@ def test_check_value() -> None:
     for bad in ['a"b', "a)b", "a\\b"]:
         with pytest.raises(describe.DescribeError):
             describe.check_value("x", bad)
+    # a CR (CRLF command output), and Cygwin's rendering of one in a file name
+    for bad in ["C:/x/_opam\r/cpython", "C:/x/_opam\uf00d/cpython"]:
+        with pytest.raises(describe.DescribeError, match="control character"):
+            describe.check_value("prefix", bad)
 
 
 def shared_cpython_313() -> bool:

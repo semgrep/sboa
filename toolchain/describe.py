@@ -65,6 +65,14 @@ def check_value(name: str, value: str) -> str:
             f"{name} contains '\"', ')', a backslash or a newline, which"
             f" sboa.config cannot carry: {value!r}"
         )
+    # A control character in a path is a CRLF command output captured without
+    # stripping the CR (`opam var` on Windows); Cygwin shows such a character
+    # in a file name as U+F000 + its code.
+    if any(ord(c) < 0x20 or ord(c) == 0x7F or 0xF000 <= ord(c) <= 0xF0FF for c in value):
+        raise DescribeError(
+            f"{name} contains a control character (a carriage return from a"
+            f" CRLF command output?): {value!r}"
+        )
     return value
 
 
@@ -336,10 +344,17 @@ def main(argv: List[str]) -> int:
         return 1
     os.makedirs(args.out, exist_ok=True)
     body = "\n ".join(f"({k} {v})" for k, v in fields)
-    with open(os.path.join(args.out, "sboa.config"), "w", newline="\n") as f:
+    # UTF-8 whatever the locale (the readers assume it; a non-ASCII path
+    # under the Windows code page would fail here, far from its cause)
+    with open(
+        os.path.join(args.out, "sboa.config"), "w", encoding="utf-8", newline="\n"
+    ) as f:
         f.write(f"({body})\n")
     with open(
-        os.path.join(args.out, "sboa_toolchain_data.ml"), "w", newline="\n"
+        os.path.join(args.out, "sboa_toolchain_data.ml"),
+        "w",
+        encoding="utf-8",
+        newline="\n",
     ) as f:
         f.write(ocaml_data(fields))
     d = {k: v.strip('"') for k, v in fields}
