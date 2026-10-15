@@ -2,22 +2,22 @@
 ; installed already, and find_python.sh locates it (SBOA_PYTHON, SBOA_PREFIX,
 ; then python3.13 / python3 on PATH). describe.py, run under that
 ; interpreter, writes sboa.config (paths, version, link library, the runtime
-; files an application ships; see ../README.md) and the data module of
-; sboa.toolchain. Every rule that needs CPython (sboa.cpython's link flags,
-; the stdlib bundle, the frozen table, applications' bundles) depends on
-; sboa.config, which is installed next to probe.sh and sboa_bundle.py.
+; files an application ships; see ../README.md). Every rule that needs
+; CPython (sboa's link flags, the stdlib bundle, the frozen table,
+; applications' bundles) depends on sboa.config, which is installed next to
+; probe.sh and sboa_bundle.py.
 ;
 ; The config records the interpreter's sys.version and libpython's size and
 ; mtime (install_fingerprint), and the globs below track the prefix's
 ; interpreter and libpython, so an upgraded installation re-runs the rule
 ; and everything downstream.
 ;
-; (sandbox none): the outputs record absolute paths of the CPython
-; installation and depend on the environment; user rules are not stored in
+; (sandbox none): the output records absolute paths of the CPython
+; installation and depends on the environment; user rules are not stored in
 ; dune's shared cache by default (keep it that way).
 
 (rule
- (targets sboa.config sboa_toolchain_data.ml)
+ (targets sboa.config)
  (deps
   find_python.sh
   describe.py
@@ -34,12 +34,3 @@
  (section lib)
  (package sboa)
  (files sboa.config))
-
-; sboa.toolchain: facts about the CPython an executable was built against
-; (see sboa_toolchain.mli).
-
-(library
- (name sboa_toolchain)
- (public_name sboa.toolchain)
- (modules sboa_toolchain sboa_toolchain_data)
- (private_modules sboa_toolchain_data))

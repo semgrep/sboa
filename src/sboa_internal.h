@@ -10,7 +10,7 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 */
-/* sboa: state and helpers shared by the C stubs of sboa.cpython.
+/* sboa: state and helpers shared by the C stubs of sboa.
 
    Thread model (v1, see BRIDGE_DESIGN.md section 3): Python runs only on the
    systhread that called sboa_init (the "main" thread, domain 0). That
@@ -115,7 +115,6 @@ extern PyObject *sboa_ocaml_error_type; /* _sboa.OCamlError */
 /* Copy the export registry and register inittab entries. Before init. */
 void sboa_exports_setup(value functions, value classes, value methods);
 /* Copy bundles / importer settings for the _sboa module. Before init. */
-void sboa_module_setup(value bundles, value libdynload_dir,
-                          value dev_overrides);
+void sboa_module_setup(value bundles, value dev_overrides);
 
 #endif

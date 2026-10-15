@@ -4,7 +4,7 @@
 ; frozen.c by the bundle tool's `freeze` subcommand.
 ;
 ; frozen.c defines strong sboa_frozen_table/sboa_frozen_magic, which
-; override the weak empty ones of sboa.cpython (src/cpython/frozen_stub.c).
+; override the weak empty ones of sboa (src/frozen_stub.c).
 ; A library archive member is only linked when something references it, so
 ; frozen_anchor.c (which #includes frozen.c) also defines a primitive that
 ; Sboa_frozen calls at module initialization; with -linkall that forces the
@@ -26,10 +26,10 @@
     (:include cflags.sexp)))
   (extra_deps frozen.c)))
 
-; frozen.c includes Python.h: same -I as sboa.cpython.
+; frozen.c includes Python.h: same -I as sboa.
 
 (rule
- (copy ../src/cpython/cflags.sexp cflags.sexp))
+ (copy ../src/cflags.sexp cflags.sexp))
 
 (rule
  (targets frozen.c)

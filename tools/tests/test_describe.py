@@ -24,7 +24,7 @@ import pytest
 
 SBOA_DIR = Path(__file__).resolve().parents[2]
 DESCRIBE = SBOA_DIR / "toolchain" / "describe.py"
-GEN_RUNTIME_FILES = SBOA_DIR / "runtime" / "gen_runtime_files.py"
+TOOL = SBOA_DIR / "tools" / "sboa_bundle.py"
 
 
 def load(path: Path) -> ModuleType:
@@ -110,6 +110,10 @@ def test_check_value() -> None:
     for bad in ['a"b', "a)b", "a\\b"]:
         with pytest.raises(describe.DescribeError):
             describe.check_value("x", bad)
+    # a CR (CRLF command output), and Cygwin's rendering of one in a file name
+    for bad in ["C:/x/_opam\r/cpython", "C:/x/_opam\uf00d/cpython"]:
+        with pytest.raises(describe.DescribeError, match="control character"):
+            describe.check_value("prefix", bad)
 
 
 def shared_cpython_313() -> bool:
@@ -143,8 +147,8 @@ def test_describe_this_interpreter(tmp_path: Path) -> None:
         text=True,
     )
     assert r.returncode == 0, r.stderr
-    gen = load(GEN_RUNTIME_FILES)
-    cfg = gen.load_config(str(out / "sboa.config"))
+    gen = load(TOOL)
+    cfg = gen.read_sboa_config(out / "sboa.config")
     assert cfg["version"].startswith("3.13.")
     assert int(cfg["magic"]) == int.from_bytes(
         importlib.util.MAGIC_NUMBER[:2], "little"
@@ -159,5 +163,3 @@ def test_describe_this_interpreter(tmp_path: Path) -> None:
     for _, dest in entries:
         assert (staged / dest).is_file()
     assert not gen.stage(cfg, "bin", str(tmp_path / "empty"))
-    ml = (out / "sboa_toolchain_data.ml").read_text()
-    assert f'let version = "{cfg["version"]}"' in ml

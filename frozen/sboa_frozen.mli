@@ -15,7 +15,7 @@
     Linking the [sboa.frozen] library is all that is needed: it is built
     with [-linkall] and its initialization references the C object holding
     [sboa_frozen_table] (the bundle importer and the [encodings] package),
-    so that table replaces the empty default of [sboa.cpython] and
+    so that table replaces the empty default of [sboa] and
     {!Sboa.init} installs the importer over the registered bundles. *)
 
 val linked : bool

@@ -3,21 +3,19 @@ WARNING: ALL SLOP RIGHT NOW
 # sboa
 
 sboa ("Sand Boa"; formerly `pyembed`) embeds CPython 3.13 in an OCaml
-executable. It is a dune virtual library (`sboa`) with two implementations:
+executable. It is a dune library (`sboa`) linked against a shared libpython,
+plus two helper libraries:
 
 | Library | What |
 |---|---|
 | `sboa` | the bridge: GIL tokens, owned object handles with deferred release, fallible conversions, OCaml functions and classes exported as builtin Python modules, exception translation both ways, signal routing, atomic counters (`src/sboa.mli`) |
-| `sboa.cpython` | the implementation linked against a shared libpython |
-| `sboa.disabled` | the implementation for executables that must not carry Python: every primitive raises `Sboa.Not_available` |
 | `sboa.stdlib` | the standard library of the CPython built against, compiled to bytecode and embedded in the executable (registered at priority 0) |
 | `sboa.frozen` | the frozen-module table: the bundle importer (`python/_sboa_importer.py`) and the `encodings` package interpreter start-up needs |
-| `sboa.toolchain` | facts about the CPython an executable was built against (version, platform, its `lib-dynload` directory) |
 
 plus the build-time tools `sboa_bundle.py` (Python bundles, the frozen table,
-the seam check), `probe.sh` (C and link flags, the build-time
-interpreter) and `gen_runtime_files.py` (stages the files an application ships
-next to its executable). Nothing here is specific to an application.
+the seam check, the wheel fetch, the runtime files an application ships next
+to its executable) and `probe.sh` (C and link flags, the build-time
+interpreter). Nothing here is specific to an application.
 
 Supported: Linux (glibc and musl) and macOS on x86_64 and arm64, Windows
 x86_64 with the mingw-w64 OCaml port (gcc; MSVC is not supported). OCaml 5.3
@@ -45,7 +43,7 @@ nixpkgs' `python313`, and the python.org Windows layout (`python.exe`,
 
 `toolchain/describe.py`, run under that interpreter (standard library only:
 `sys` and `sysconfig` plus the installation's layout), writes
-`toolchain/sboa.config` and the data module of `sboa.toolchain`. The rule
+`toolchain/sboa.config`. The rule
 tracks `SBOA_PREFIX`, `SBOA_PYTHON`, `SBOA_MAGIC` and, under `SBOA_PREFIX`,
 `bin/python3*` and `lib/libpython3*`; the config records the interpreter's
 `sys.version` and libpython's size and mtime, so upgrading the installation
@@ -70,13 +68,12 @@ Consumers must ignore unknown fields.
 | `incdir`, `stdlib_dir` | `sysconfig`'s `include` and `stdlib` paths |
 | `libdir`, `lib_file`, `lib_name` | the library linked by full path (`libpython3.13.so.1.0` or `.so`, `libpython3.13.dylib`, or the import library `libs/python313.lib`), its directory, and `python3.13` / `python313` |
 | `libdynload_dir` | the extension-module directory (`<stdlib>/lib-dynload`, `DLLs/` on Windows) |
-| `external_libdynload_dir` | `libdynload_dir` when it holds extension modules that ship (empty for python-build-standalone, whose modules are compiled into libpython, and on Windows); compiled into `sboa.toolchain` as the fallback for executables run without their runtime files |
 | `python_exe` | the interpreter (build time only) |
 | `runtime_subdir` | the directory under `bin/` the runtime files install into: `libs` on Linux and macOS, empty on Windows |
 | `runtime_libdynload` | the extension-module directory relative to `bin/<runtime_subdir>/` |
 | `runtime_files` | what must sit next to the executable for it to run without the CPython installation: libpython (under its SONAME; left out for macOS framework builds, whose absolute install name is always used) and the `lib-dynload` modules on Linux and macOS; `python313.dll`, `python3.dll`, the `vcruntime` DLLs and the `.pyd`/`.dll` files of `DLLs/` on Windows. Tk and CPython's test modules are left out. |
 
-Executables linked with `sboa.cpython` get two rpaths on Linux and macOS:
+Executables linked with `sboa` get two rpaths on Linux and macOS:
 `$ORIGIN/libs` / `@loader_path/libs` (where the runtime files ship) and the
 absolute `libdir` (so test binaries in `_build` run). Release builds that must
 not carry the build machine's path set `SBOA_NO_LIBDIR_RPATH=1` when building
@@ -84,18 +81,17 @@ sboa. On Windows the DLLs live next to the `.exe`.
 
 ## Using sboa from dune
 
-An installed sboa puts `sboa.config`, `probe.sh`, `sboa_bundle.py` and
-`gen_runtime_files.py` in `lib/sboa/`; dune rules reference them as
+An installed sboa puts `sboa.config`, `probe.sh` and `sboa_bundle.py` in
+`lib/sboa/`; dune rules reference them as
 `%{lib:sboa:...}` (which also makes them dependencies). `SBOA_CONFIG`
 overrides the config `probe.sh` reads.
 
-Link `sboa` and one implementation, and usually the stdlib and the frozen
-importer:
+Link `sboa`, and usually the stdlib and the frozen importer:
 
 ```dune
 (executable
  (name main)
- (libraries sboa sboa.cpython sboa.stdlib sboa.frozen))
+ (libraries sboa sboa.stdlib sboa.frozen))
 ```
 
 Bundle application code (a Python package directory, or wheels with
@@ -127,8 +123,8 @@ Windows):
  (enabled_if (<> %{os_type} Win32))
  (targets (dir runtime_libs))
  (action
-  (run sh %{lib:sboa:probe.sh} --exec-python -I
-   %{lib:sboa:gen_runtime_files.py} %{lib:sboa:sboa.config}
+  (run sh %{lib:sboa:probe.sh} --exec-python -I %{lib:sboa:sboa_bundle.py}
+   --config %{lib:sboa:sboa.config} runtime-files
    --layout libs --out runtime_libs)))
 
 (install
@@ -141,8 +137,8 @@ Windows):
  (enabled_if (= %{os_type} Win32))
  (targets (dir runtime_bin))
  (action
-  (run sh %{lib:sboa:probe.sh} --exec-python -I
-   %{lib:sboa:gen_runtime_files.py} %{lib:sboa:sboa.config}
+  (run sh %{lib:sboa:probe.sh} --exec-python -I %{lib:sboa:sboa_bundle.py}
+   --config %{lib:sboa:sboa.config} runtime-files
    --layout bin --out runtime_bin
    --check-install-list %{dep:dune})))
 
@@ -164,7 +160,7 @@ The directory targets need `(using directory-targets 0.1)` in the consumer's
 `enabled_if`s.
 
 Executables built with `-noautolink` must pass the link flags themselves: the
-stub archives `-lsboa_cpython_stubs`, `-lsboa_frozen_stubs`,
+stub archives `-lsboa_stubs`, `-lsboa_frozen_stubs`,
 `-lsboa_stdlib_stubs`, then `lib_file` from the config and the two rpaths
 above.
 

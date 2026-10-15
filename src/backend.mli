@@ -10,16 +10,15 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(** Primitive layer of [sboa] (virtual module).
+(** Primitive layer of [sboa].
 
-    This is the boundary between the OCaml bridge logic in {!Sboa} and an
-    implementation: [sboa.cpython] binds each value to a C stub against
-    [Python.h]; [sboa.disabled] raises {!Not_available} from every
-    primitive that needs an interpreter. Nothing outside [sboa] should use
-    this module: it is unsafe by design (it trusts {!Sboa} to call it on
-    the right thread with the right locks).
+    This is the boundary between the OCaml bridge logic in {!Sboa} and the
+    C stubs against [Python.h] (sboa_runtime.c, sboa_object.c,
+    sboa_export.c), each value being one stub. Nothing outside [sboa] should
+    use this module: it is unsafe by design (it trusts {!Sboa} to call it
+    on the right thread with the right locks).
 
-    Conventions for the cpython implementation:
+    Conventions:
     - Every primitive that touches Python checks that the calling thread
       holds the GIL and raises [Invalid_argument] otherwise (a [gil] token
       used outside its scope).
@@ -49,9 +48,6 @@ exception Pending
 exception Overflow
 (** A Python int does not fit in an OCaml [int]. *)
 
-exception Not_available
-(** Raised by the disabled implementation. *)
-
 type fn_spec = {
   fn_module : string;
   fn_name : string;
@@ -79,12 +75,8 @@ type method_spec = {
 
 type init_args = {
   program_name : string;
-  argv : string array;
-  home : string option;
   sys_path : string array;
-  libdynload_dir : string option;
   dev_overrides : string array;
-  handle_signals : bool;
   functions : fn_spec array;
   classes : class_spec array;
   methods : method_spec array;

@@ -57,56 +57,6 @@ let check_refused mode =
           Printf.printf "importer: %s bundle refused: %s\n" mode line
       | exception e -> fail "%s: %s" mode (Printexc.to_string e))
 
-(* The external-prefix fallback for C extension modules: the stdlib alone is
-   on sys.path (not its lib-dynload), so an extension module can only come
-   from the bundle importer's libdynload_dir, here
-   Sboa_toolchain.libdynload_dir (). Only meaningful when the toolchain
-   is an external CPython (SBOA_PREFIX) with extension modules. *)
-let check_dynload () =
-  match Sboa_toolchain.external_libdynload_dir with
-  | None ->
-      print_endline
-        "importer: dynload: skipped (the toolchain has no external lib-dynload)"
-  | Some ext -> (
-      let candidates =
-        Sys.readdir ext |> Array.to_list
-        |> List.filter (fun f ->
-            String.starts_with ~prefix:"_dbm." f
-            || String.starts_with ~prefix:"math." f)
-        |> List.sort String.compare
-      in
-      match candidates with
-      | [] ->
-          print_endline
-            ("importer: dynload: skipped (no _dbm or math extension in " ^ ext
-           ^ ")")
-      | f :: _ ->
-          let modname =
-            match String.index_opt f '.' with
-            | Some i -> String.sub f 0 i
-            | None -> f
-          in
-          (match Sboa_toolchain.libdynload_dir () with
-          | Some d when String.equal d ext -> ()
-          | _ -> fail "dynload: libdynload_dir () is not %s" ext);
-          Sboa.init
-            {
-              (Sboa.Config.default ()) with
-              extra_sys_path = [ stdlib ];
-              libdynload_dir = Sboa_toolchain.libdynload_dir ();
-            };
-          let file =
-            Sboa.with_gil (fun gil ->
-                Sboa.exec gil
-                  (Printf.sprintf "import %s\nresult = %s.__file__\n" modname
-                     modname);
-                Sboa.Conv.of_py_exn Sboa.Conv.string gil
-                  (Sboa.eval gil "result"))
-          in
-          if String.starts_with ~prefix:ext file then
-            Printf.printf "importer: dynload: ok: %s from %s\n" modname file
-          else fail "dynload: %s loaded from %s, not %s" modname file ext)
-
 let () =
   assert (String.equal (Sboa.Bundle.name Demo_bundle.bundle) "demo");
   let demo = Sboa.Bundle.data Demo_bundle.bundle in
@@ -121,15 +71,13 @@ let () =
         (Sboa.Bundle.of_incbin ~symbol:"demo_bundle" ~name:"truncated"
            (Bigarray.Array1.sub demo 0 (Bigarray.Array1.dim demo / 2)));
       check_refused "truncated"
-  | [| _; "dynload" |] -> check_dynload ()
   | _ ->
-      (* The extension modules of a CPython that keeps them in lib-dynload
-         (zlib among them on nix) come through the importer, like in an
-         application. *)
+      (* The stdlib and, for a CPython that keeps extension modules in
+         lib-dynload (zlib among them on nix), that directory come from
+         sys.path; only demopkg comes through the importer. *)
       Sboa.init
         {
           (Sboa.Config.default ()) with
-          extra_sys_path = [ stdlib ];
-          libdynload_dir = Sboa_toolchain.libdynload_dir ();
+          extra_sys_path = [ stdlib; Filename.concat stdlib "lib-dynload" ];
         };
       check_ok ()

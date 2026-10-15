@@ -1280,6 +1280,62 @@ def test_fetch_wheels_markers_follow_embedded_target(tmp_path: Path) -> None:
     assert r.returncode == 2 and "unknown platform" in r.stderr
 
 
+def test_fetch_wheels_prune(tmp_path: Path) -> None:
+    """``--prune`` deletes the wheels the lock does not select, after a
+    successful fetch only."""
+    lock, whl, d = _closure_lock(tmp_path)
+    stale = d / "stale-9.9-py3-none-any.whl"
+    stale.write_bytes(b"not a wheel")
+    base = ["fetch-wheels", "--lock", str(lock), "-d", str(d), "--offline", "--prune"]
+    linux = ["--python-version", "3.13.16", "--platform", "linux-gnu-x86_64"]
+    # A failed fetch (the closure needs a wheel that is missing) prunes nothing.
+    (d / whl["core"].name).rename(tmp_path / "away.whl")
+    r = run_tool(*base, *linux, check=False)
+    assert r.returncode == 1 and "missing (offline)" in r.stderr
+    assert sorted(p.name for p in d.glob("*.whl")) == sorted(
+        [stale.name, whl["oldpy"].name, whl["winonly"].name]
+    )
+    (tmp_path / "away.whl").rename(d / whl["core"].name)
+    r = run_tool(*base, *linux, check=False)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == [whl["core"].name]
+    assert "removing stale" in r.stderr
+    assert [p.name for p in d.glob("*.whl")] == [whl["core"].name]
+
+
+def test_runtime_files(tmp_path: Path) -> None:
+    """``runtime-files`` stages the config's files for the matching layout
+    only, and ``--check-install-list`` compares the bin layout with the dune
+    install stanza."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "python313.dll").write_bytes(b"dll")
+    (src / "_ssl.pyd").write_bytes(b"pyd")
+    cfg = tmp_path / "sboa.config"
+    cfg.write_text(
+        f'((version "3.13.16")\n (stdlib_dir "{STDLIB_DIR}")\n'
+        f' (python_exe "{sys.executable}")\n (runtime_subdir "")\n'
+        f' (runtime_files (("{src / "python313.dll"}" "python313.dll")'
+        f' ("{src / "_ssl.pyd"}" "_ssl.pyd"))))\n'
+    )
+    cmd = ["--config", str(cfg), "runtime-files"]
+    # The other layout: an empty directory, no check.
+    run_tool(*cmd, "--layout", "libs", "--out", str(tmp_path / "libs"))
+    assert list((tmp_path / "libs").iterdir()) == []
+    dune = tmp_path / "dune"
+    dune.write_text(
+        "(install\n (files\n  (runtime_bin/python313.dll as python313.dll)"
+        "\n  ; (runtime_bin/old.pyd as old.pyd)\n  (runtime_bin/_ssl.pyd as _ssl.pyd)))\n"
+    )
+    out = tmp_path / "bin"
+    check = ["--layout", "bin", "--out", str(out), "--check-install-list", str(dune)]
+    run_tool(*cmd, *check)
+    assert sorted(p.name for p in out.iterdir()) == ["_ssl.pyd", "python313.dll"]
+    dune.write_text("(install (files (runtime_bin/python313.dll as python313.dll)))\n")
+    r = run_tool(*cmd, *check, check=False)
+    assert r.returncode == 1 and "staged but not installed: _ssl.pyd" in r.stderr
+
+
 def test_bundle_lock_checks_closure(tmp_path: Path) -> None:
     """Item 14: ``bundle --lock`` refuses a wheel set that is not the closure."""
     lock, whl, d = _closure_lock(tmp_path)

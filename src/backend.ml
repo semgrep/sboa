@@ -10,9 +10,8 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(* sboa.cpython implementation of the [Backend] primitives: every value is
-   a C stub in sboa_{runtime,object,export}.c. See backend.mli for the
-   contract. *)
+(* The [Backend] primitives: every value is a C stub in
+   sboa_{runtime,object,export}.c. See backend.mli for the contract. *)
 
 type obj
 
@@ -21,7 +20,6 @@ type data =
 
 exception Pending
 exception Overflow
-exception Not_available
 
 let () =
   Callback.register_exception "sboa.pending" Pending;
@@ -50,12 +48,8 @@ type method_spec = {
 
 type init_args = {
   program_name : string;
-  argv : string array;
-  home : string option;
   sys_path : string array;
-  libdynload_dir : string option;
   dev_overrides : string array;
-  handle_signals : bool;
   functions : fn_spec array;
   classes : class_spec array;
   methods : method_spec array;

@@ -478,14 +478,13 @@ static PyMethodDef signal_wrapper_def = {
 
 /* Called with the GIL held, right after Py_InitializeFromConfig. Returns 0
    or -1 with a Python exception set. */
-static int setup_signals(int handle) {
+static int setup_signals(void) {
   /* Like a default CPython start-up: writing to a closed pipe raises
      BrokenPipeError instead of killing the process. Inherited by child
      processes: spawners that need SIG_DFL must reset it. */
 #ifndef _WIN32 /* no SIGPIPE on Windows: a closed pipe is an EPIPE/EINVAL error */
   signal(SIGPIPE, SIG_IGN);
 #endif
-  if (!handle) return 0;
   PyObject *mod = PyImport_ImportModule("_signal");
   if (mod == NULL) return -1;
   PyObject *py_handler = PyObject_GetAttrString(mod, "default_int_handler");
@@ -573,16 +572,14 @@ value sboa_init(value args) {
   CAMLparam1(args);
   if (init_error != NULL) caml_failwith(init_error);
   if (sboa_initialized) CAMLreturn(Val_unit);
-  value v_prog = Field(args, 0), v_argv = Field(args, 1),
-        v_home = Field(args, 2), v_path = Field(args, 3),
-        v_dynload = Field(args, 4), v_dev = Field(args, 5),
-        v_signals = Field(args, 6), v_functions = Field(args, 7),
-        v_classes = Field(args, 8), v_methods = Field(args, 9),
-        v_bundles = Field(args, 10);
+  value v_prog = Field(args, 0), v_path = Field(args, 1),
+        v_dev = Field(args, 2), v_functions = Field(args, 3),
+        v_classes = Field(args, 4), v_methods = Field(args, 5),
+        v_bundles = Field(args, 6);
 
   /* Builtin modules must be in the inittab before Py_Initialize
      (import.html#c.PyImport_AppendInittab). */
-  sboa_module_setup(v_bundles, v_dynload, v_dev);
+  sboa_module_setup(v_bundles, v_dev);
   sboa_exports_setup(v_functions, v_classes, v_methods);
 
   /* Custom frozen modules are consulted before the stdlib ones
@@ -623,8 +620,6 @@ value sboa_init(value args) {
   st = set_string(&config, &config.program_name, v_prog);
   if (!PyStatus_Exception(st))
     st = set_string(&config, &config.executable, v_prog);
-  if (!PyStatus_Exception(st) && Is_some(v_home))
-    st = set_string(&config, &config.home, Some_val(v_home));
   for (mlsize_t i = 0; !PyStatus_Exception(st) && i < Wosize_val(v_path); i++) {
     wchar_t *w = Py_DecodeLocale(String_val(Field(v_path, i)), NULL);
     if (w == NULL) {
@@ -635,15 +630,9 @@ value sboa_init(value args) {
     PyMem_RawFree(w);
   }
   if (!PyStatus_Exception(st)) {
-    mlsize_t argc = Wosize_val(v_argv);
-    char **argv = calloc(argc + 1, sizeof(char *));
-    if (argv == NULL) st = PyStatus_NoMemory();
-    for (mlsize_t i = 0; argv && i < argc; i++)
-      argv[i] = (char *)String_val(Field(v_argv, i));
-    if (argv) {
-      st = PyConfig_SetBytesArgv(&config, (Py_ssize_t)argc, argv);
-      free(argv);
-    }
+    /* sys.argv = [program name]; the application sets the real one. */
+    char *argv[] = {(char *)String_val(v_prog), NULL};
+    st = PyConfig_SetBytesArgv(&config, 1, argv);
   }
   if (!PyStatus_Exception(st)) st = Py_InitializeFromConfig(&config);
   PyConfig_Clear(&config);
@@ -691,7 +680,7 @@ value sboa_init(value args) {
     format_python_error(err, sizeof err, "installing _sboa_importer");
     failed = 1;
   }
-  if (!failed && setup_signals(Bool_val(v_signals)) != 0) {
+  if (!failed && setup_signals() != 0) {
     format_python_error(err, sizeof err, "signal setup");
     failed = 1;
   }

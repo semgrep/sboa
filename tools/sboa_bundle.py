@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""Build-time tool for ``sboa``: Python bundles, the frozen table, the seam check.
+"""Build-time tool for ``sboa``: Python bundles, the frozen table, the seam check,
+the runtime files.
 
 Run it with the embedded interpreter (the bytecode it writes is only valid for the
-interpreter that compiled it; ``--python`` re-executes the tool under the given
-interpreter).  Standard library only.
+interpreter that compiled it; with ``--config`` the tool re-executes itself under
+the config's ``python_exe``).  Standard library only.
 
 Subcommands::
 
-  bundle       compile packages / wheels into a deterministic zip of unchecked-hash
-               .pyc files (+ data files and trimmed *.dist-info) and emit the C/OCaml
-               sources that embed it with ``.incbin``
-  stdlib       same, for the interpreter's standard library (with the exclusion list)
-  embed        emit the C/OCaml embedding sources for an existing bundle zip
-  freeze       marshal modules into ``struct _frozen sboa_frozen_table[]`` (C)
-  check-seam   diff the attributes a bundle's bytecode uses on a module against the
-               names the native side exports
-  fetch-wheels download the pure-Python wheels of a ``uv.lock`` closure
-               (network; for a make target, never inside dune)
+  bundle        compile packages / wheels into a deterministic zip of unchecked-hash
+                .pyc files (+ data files and trimmed *.dist-info) and emit the C/OCaml
+                sources that embed it with ``.incbin``
+  stdlib        same, for the interpreter's standard library (with the exclusion list)
+  embed         emit the C/OCaml embedding sources for an existing bundle zip
+  freeze        marshal modules into ``struct _frozen sboa_frozen_table[]`` (C)
+  check-seam    diff the attributes a bundle's bytecode uses on a module against the
+                names the native side exports
+  fetch-wheels  download the pure-Python wheels of a ``uv.lock`` closure
+                (network; for a make target, never inside dune)
+  runtime-files stage the files an application ships next to its executable
+                (``runtime_files`` of ``sboa.config``) into a directory target
 
 Determinism: every zip has sorted member names, a fixed 1980-01-01 timestamp, fixed
 permissions and no directory entries; ``.pyc`` files use the PEP 552
@@ -38,6 +41,7 @@ import json
 import marshal
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -55,6 +59,7 @@ from typing import Optional
 from typing import Sequence
 from typing import Set
 from typing import Tuple
+from typing import Union
 
 FORMAT_VERSION = 1
 ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
@@ -626,14 +631,14 @@ def add_site(
 # ---------------------------------------------------------------------------
 
 
-def write_zip(contents: BundleContents, out: Path, compress: bool) -> None:
+def write_zip(contents: BundleContents, out: Path) -> None:
     if len(contents.members) >= 0xFFFF:
         raise ToolError("too many members for a non-zip64 bundle")
     comment = (
         f"sboa-bundle/{FORMAT_VERSION} name={contents.name} "
         f"magic={importlib.util.MAGIC_NUMBER.hex()}"
     ).encode("ascii")
-    method = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
+    method = zipfile.ZIP_DEFLATED
     tmp = out.with_suffix(out.suffix + ".tmp")
     with zipfile.ZipFile(tmp, "w") as zf:
         for arc in sorted(contents.members):
@@ -642,10 +647,7 @@ def write_zip(contents: BundleContents, out: Path, compress: bool) -> None:
             info.external_attr = 0o100644 << 16
             info.compress_type = method
             zf.writestr(
-                info,
-                contents.members[arc].data,
-                compress_type=method,
-                compresslevel=9 if compress else None,
+                info, contents.members[arc].data, compress_type=method, compresslevel=9
             )
         zf.comment = comment
     os.replace(tmp, out)
@@ -899,14 +901,13 @@ def add_embed_args(p: argparse.ArgumentParser, default_priority: int) -> None:
     )
     p.add_argument("--mli", action="store_true", help="also write BASE.mli")
     p.add_argument("--zip-only", action="store_true", help="only write the zip")
-    p.add_argument("--stored", action="store_true", help="store members uncompressed")
 
 
 def finish_bundle(contents: BundleContents, args: argparse.Namespace) -> None:
     base = args.base or f"{contents.name}_bundle"
     args.out.mkdir(parents=True, exist_ok=True)
     zip_path = args.out / f"{base}.zip"
-    write_zip(contents, zip_path, compress=not args.stored)
+    write_zip(contents, zip_path)
     if not args.zip_only:
         emit_embedding(
             zip_path,
@@ -1001,7 +1002,7 @@ def cmd_stdlib(args: argparse.Namespace) -> None:
     if root is None:
         if args.config is None:
             raise ToolError("stdlib needs --stdlib-dir or --config")
-        root = Path(read_sboa_config(args.config)["stdlib_dir"])
+        root = Path(config_str(read_sboa_config(args.config), "stdlib_dir"))
     if not (root / "os.py").is_file():
         raise ToolError(f"{root}: not a stdlib directory (no os.py)")
     for rel, p in walk_tree(root):
@@ -1053,7 +1054,7 @@ def frozen_entries(args: argparse.Namespace) -> List[Tuple[str, bytes, bool]]:
                 raise ToolError(
                     "--stdlib-package needs --stdlib-dir or --config"
                 )
-            stdlib_dir = Path(read_sboa_config(args.config)["stdlib_dir"])
+            stdlib_dir = Path(config_str(read_sboa_config(args.config), "stdlib_dir"))
         packages += [(n, stdlib_dir / n.replace(".", "/")) for n in args.stdlib_package]
     for name, path in packages:
         if not (path / "__init__.py").is_file():
@@ -1378,7 +1379,7 @@ def target_marker_env_from_args(args: argparse.Namespace) -> Dict[str, str]:
         cfg = read_sboa_config(args.config)
         if "version" not in cfg or "platform" not in cfg:
             raise ToolError(f"{args.config}: no version/platform fields")
-        version, platform = cfg["version"], cfg["platform"]
+        version, platform = config_str(cfg, "version"), config_str(cfg, "platform")
     return target_marker_env(version, platform)
 
 
@@ -1572,6 +1573,7 @@ def cmd_fetch_wheels(args: argparse.Namespace) -> None:
     # Recorded for `bundle --exclude-dist-file DIR/.excludes` (closure check).
     (args.out / ".excludes").write_text("".join(f"{d}\n" for d in sorted(excluded)))
     skipped: List[str] = []
+    selected: Set[str] = set()
     for dist, version, marker in fetch_requirements(args, env):
         if marker.strip() and not eval_marker(marker, env):
             skipped.append(f"{dist} (marker: {marker.strip()})")
@@ -1594,6 +1596,7 @@ def cmd_fetch_wheels(args: argparse.Namespace) -> None:
         if algo != "sha256" or not want:
             raise ToolError(f"{fn}: the lock has no sha256 for this wheel")
         dest = args.out / fn
+        selected.add(fn)
         if dest.is_file():
             if sha256_file(dest) == want:
                 print(fn)  # reused, verified
@@ -1609,6 +1612,126 @@ def cmd_fetch_wheels(args: argparse.Namespace) -> None:
         print(fn)
     for s in skipped:
         print(f"skipped: {s}", file=sys.stderr)
+    if args.prune:
+        # Only after a complete fetch: a stale wheel would fail the bundle's
+        # closure check, but a failed fetch must leave the cache alone.
+        for p in sorted(args.out.glob("*.whl")):
+            if p.name not in selected:
+                print(f"removing stale {p}", file=sys.stderr)
+                p.unlink()
+
+
+# ---------------------------------------------------------------------------
+# runtime-files: the files an application ships next to its executable
+# ---------------------------------------------------------------------------
+
+# ``sboa.config`` lists, in ``runtime_files``, the files that must sit next to
+# the final executable: the shared library and the extension modules.
+# ``runtime-files --layout libs|bin --out DIR`` copies them into DIR (modes
+# preserved) when the platform's layout matches, and creates an empty DIR
+# otherwise. Run as the action of a dune rule with ``(targets (dir DIR))`` it
+# lets a dune project install the files without any platform knowledge:
+#
+#   libs  Linux/macOS: runtime_subdir is ``libs``; the files land in bin/libs/.
+#   bin   Windows: runtime_subdir is empty; DLLs and .pyd land in bin/, next to
+#         the .exe, which is where the Windows loader looks.
+#
+# (dune cannot read external files in an ``install`` stanza, ``install`` has no
+# ``:include``, and a generated dune file cannot be ``include``d, so the names
+# cannot flow into the stanza; whole directories can.)
+#
+# The Windows ``install`` stanza therefore names every file by hand. With
+# ``--check-install-list FILE`` (the dune file holding that stanza) the staged
+# ``bin`` layout must be exactly the ``(runtime_bin/NAME as NAME)`` entries of
+# FILE, otherwise the build fails: a CPython upgrade that adds, drops or
+# renames a DLL or extension module is caught here instead of as a missing
+# file at run time.
+
+
+def runtime_entries(cfg: "Dict[str, Sexp]") -> List[Tuple[str, str]]:
+    """(absolute source, destination relative to bin/<subdir>/)."""
+    files = cfg.get("runtime_files")
+    if not isinstance(files, list):
+        raise ToolError("config field 'runtime_files' missing or not a list")
+    out: List[Tuple[str, str]] = []
+    for item in files:
+        if not (isinstance(item, list) and len(item) == 2):
+            raise ToolError(f"malformed runtime_files entry: {item!r}")
+        src, dest = item
+        if not (isinstance(src, str) and isinstance(dest, str)):
+            raise ToolError(f"malformed runtime_files entry: {item!r}")
+        if not os.path.isabs(src):
+            raise ToolError(f"runtime file {src!r} is not an absolute path")
+        if os.path.isabs(dest) or ".." in dest.replace("\\", "/").split("/"):
+            raise ToolError(f"runtime file destination {dest!r} escapes the directory")
+        out.append((src, dest))
+    return out
+
+
+def stage(cfg: "Dict[str, Sexp]", layout: str, out_dir: str) -> bool:
+    """Copy the runtime files into [out_dir]/<dest> if the config's layout is
+    [layout] ("libs": runtime_subdir is non-empty; "bin": it is empty), else
+    just create the empty [out_dir]. Returns whether anything was staged."""
+    os.makedirs(out_dir, exist_ok=True)
+    if ("libs" if config_str(cfg, "runtime_subdir") else "bin") != layout:
+        return False
+    for src, dest in runtime_entries(cfg):
+        out = os.path.join(out_dir, dest)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        shutil.copyfile(src, out)
+        shutil.copymode(src, out)
+    return True
+
+
+_INSTALL_ENTRY = re.compile(r"\(\s*runtime_bin/([^\s()]+)\s+as\s+([^\s()]+)\s*\)")
+
+
+def install_list(path: str) -> List[str]:
+    """The NAMEs of the ``(runtime_bin/NAME as NAME)`` entries of a dune file
+    (``;`` comments ignored)."""
+    with open(path, encoding="utf-8") as f:
+        text = "\n".join(line.split(";", 1)[0] for line in f.read().splitlines())
+    names: List[str] = []
+    for src, dest in _INSTALL_ENTRY.findall(text):
+        if src != dest:
+            raise ToolError(f"{path}: runtime_bin/{src} is installed as {dest}")
+        names.append(src)
+    return names
+
+
+def check_install_list(out_dir: str, list_file: str) -> None:
+    """Fail unless the files staged in [out_dir] are exactly the install
+    list of [list_file]."""
+    staged = set()
+    for dirpath, _dirs, files in os.walk(out_dir):
+        for name in files:
+            rel = os.path.relpath(os.path.join(dirpath, name), out_dir)
+            staged.add(rel.replace(os.sep, "/"))
+    listed = set(install_list(list_file))
+    if staged == listed:
+        return
+    lines = [
+        f"the runtime files staged in {out_dir} differ from the install list"
+        f" in {list_file}:"
+    ]
+    for name in sorted(staged - listed):
+        lines.append(f"  staged but not installed: {name}")
+    for name in sorted(listed - staged):
+        lines.append(f"  installed but not staged: {name}")
+    lines.append(
+        "Update the (runtime_bin/NAME as NAME) entries of the Windows install"
+        " stanza."
+    )
+    raise ToolError("\n".join(lines))
+
+
+def cmd_runtime_files(args: argparse.Namespace) -> None:
+    if args.config is None:
+        raise UsageError("runtime-files needs --config")
+    cfg = read_sboa_config(args.config)
+    staged_here = stage(cfg, args.layout, str(args.out))
+    if args.check_install_list and args.layout == "bin" and staged_here:
+        check_install_list(str(args.out), str(args.check_install_list))
 
 
 # ---------------------------------------------------------------------------
@@ -1648,13 +1771,10 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument(
-        "--python", help="interpreter to run under (re-executes the tool if different)"
-    )
-    ap.add_argument(
         "--config",
         type=Path,
-        help="sboa.config: run under its python_exe (unless --python) and"
-        " default stdlib --stdlib-dir to its stdlib_dir",
+        help="sboa.config: run under its python_exe, evaluate wheel markers for"
+        " its interpreter, default stdlib --stdlib-dir to its stdlib_dir",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -1792,37 +1912,100 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="never download: every wheel must already be in -d with the lock's sha256",
     )
+    w.add_argument(
+        "--prune",
+        action="store_true",
+        help="after a successful fetch, delete the *.whl files of -d that the"
+        " lock does not select (a stale wheel fails the bundle's closure check)",
+    )
     w.set_defaults(func=cmd_fetch_wheels)
+
+    r = sub.add_parser(
+        "runtime-files",
+        help="stage the runtime files of --config into a directory (dune target)",
+    )
+    r.add_argument("--layout", choices=["libs", "bin"], required=True)
+    r.add_argument("--out", type=Path, required=True, help="directory to populate")
+    r.add_argument(
+        "--check-install-list",
+        type=Path,
+        metavar="FILE",
+        help="with --layout bin: the dune file whose (runtime_bin/NAME as NAME)"
+        " entries must be exactly the staged files",
+    )
+    r.set_defaults(func=cmd_runtime_files)
     return ap
 
 
-def read_sboa_config(path: Path) -> Dict[str, str]:
-    """Read the string fields of a ``sboa.config`` s-expression.
+# ---------------------------------------------------------------------------
+# sboa.config
+# ---------------------------------------------------------------------------
 
-    Only ``(key "value")`` and ``(key atom)`` pairs are extracted; that covers
-    ``stdlib_dir``, ``python_exe``, ``magic`` and friends.
-    """
-    text = path.read_text()
-    out: Dict[str, str] = {}
-    for m in re.finditer(
-        r'\(\s*([A-Za-z_]+)\s+(?:"((?:[^"\\]|\\.)*)"|([^\s()"]+))\s*\)', text
-    ):
-        out.setdefault(m[1], m[2] if m[2] is not None else m[3])
-    for key in ("stdlib_dir", "python_exe"):
-        if key not in out:
-            raise ToolError(f"{path}: no {key} field")
-    return out
+Sexp = Union[str, List["Sexp"]]
+
+_SEXP_TOKEN = re.compile(
+    r'\s+|(?P<lp>\()|(?P<rp>\))|"(?P<str>(?:[^"\\]|\\.)*)"|(?P<atom>[^\s()"]+)'
+)
+
+
+def parse_sexp(text: str) -> Sexp:
+    """Parse one sexp made of lists, atoms and double-quoted strings."""
+    stack: List[List[Sexp]] = [[]]
+    pos = 0
+    while pos < len(text):
+        m = _SEXP_TOKEN.match(text, pos)
+        if m is None:
+            raise ToolError(f"cannot parse sexp at offset {pos}")
+        pos = m.end()
+        if m.group("lp"):
+            stack.append([])
+        elif m.group("rp"):
+            if len(stack) < 2:
+                raise ToolError("unbalanced ')'")
+            done = stack.pop()
+            stack[-1].append(done)
+        elif m.group("str") is not None:
+            stack[-1].append(re.sub(r"\\(.)", r"\1", m.group("str")))
+        elif m.group("atom"):
+            stack[-1].append(m.group("atom"))
+    if len(stack) != 1 or len(stack[0]) != 1:
+        raise ToolError("expected exactly one complete sexp")
+    return stack[0][0]
+
+
+def read_sboa_config(path: Path) -> Dict[str, Sexp]:
+    """Read ``sboa.config``: a list of ``(field value)`` pairs, the value a
+    string (or atom) except ``runtime_files``, a list of ``(source dest)``
+    pairs. Unknown fields are kept as they are."""
+    top = parse_sexp(path.read_text(encoding="utf-8"))
+    if not isinstance(top, list):
+        raise ToolError(f"{path}: must be a list of (field value) pairs")
+    cfg: Dict[str, Sexp] = {}
+    for entry in top:
+        if not (
+            isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str)
+        ):
+            raise ToolError(f"{path}: malformed entry: {entry!r}")
+        cfg.setdefault(entry[0], entry[1])
+    return cfg
+
+
+def config_str(cfg: Dict[str, Sexp], key: str) -> str:
+    v = cfg.get(key)
+    if not isinstance(v, str):
+        raise ToolError(f"sboa.config: field '{key}' missing or not a string")
+    return v
 
 
 def reexec_if_needed(argv: Sequence[str]) -> None:
-    """Re-run under ``--python`` and/or with ``PYTHONHASHSEED=0`` (deterministic marshal)."""
+    """Re-run under ``--config``'s interpreter and/or with ``PYTHONHASHSEED=0``
+    (deterministic marshal)."""
     ap = argparse.ArgumentParser(add_help=False)
-    ap.add_argument("--python")
     ap.add_argument("--config", type=Path)
     known, _ = ap.parse_known_args(argv)
-    target = known.python or sys.executable
-    if known.python is None and known.config is not None:
-        target = read_sboa_config(known.config)["python_exe"]
+    target = sys.executable
+    if known.config is not None:
+        target = config_str(read_sboa_config(known.config), "python_exe")
     rest = list(argv)
     same = os.path.realpath(target) == os.path.realpath(sys.executable)
     if (

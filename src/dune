@@ -1,10 +1,40 @@
-; The sboa virtual library. All logic lives in [Sboa] (sboa.ml);
-; the virtual module [Backend] is the primitive layer, implemented by
-; sboa.cpython (C stubs against Python.h) and sboa.disabled (raises
-; Sboa.Not_available).
+; The sboa library. All logic lives in [Sboa] (sboa.ml); [Backend] is the
+; primitive layer: C stubs against Python.h (sboa_runtime.c, sboa_object.c,
+; sboa_export.c), linked against the CPython shared library located by
+; probe.sh.
 
 (library
  (name sboa)
  (public_name sboa)
- (virtual_modules backend)
- (libraries threads.posix unix))
+ ; threads.posix: the stubs use the systhreads master lock
+ ; (caml_enter/leave_blocking_section with several systhreads) and
+ ; pthread_atfork; unix: Unix._exit in Sboa.exit.
+ (libraries threads.posix unix)
+ (foreign_stubs
+  (language c)
+  (names sboa_runtime sboa_object sboa_export frozen_stub)
+  ; gcc/clang flags (mingw-w64 gcc on Windows); MSVC is not supported.
+  (flags
+   (:standard
+    -std=c99
+    -D_GNU_SOURCE
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+    (:include cflags.sexp))))
+ (c_library_flags
+  (:include link.sexp)))
+
+; Link flags for the CPython described by toolchain/sboa.config
+; (probe.sh reads it; SBOA_CONFIG overrides it; SBOA_PREFIX goes
+; through the toolchain rule).
+
+(rule
+ (targets cflags.sexp link.sexp)
+ (deps
+  (:probe %{project_root}/probe.sh)
+  %{project_root}/toolchain/sboa.config
+  (env_var SBOA_CONFIG)
+  (env_var SBOA_NO_LIBDIR_RPATH))
+ (action
+  (run sh %{probe} %{targets})))
