@@ -163,5 +163,3 @@ def test_describe_this_interpreter(tmp_path: Path) -> None:
     for _, dest in entries:
         assert (staged / dest).is_file()
     assert not gen.stage(cfg, "bin", str(tmp_path / "empty"))
-    ml = (out / "sboa_toolchain_data.ml").read_text()
-    assert f'let version = "{cfg["version"]}"' in ml

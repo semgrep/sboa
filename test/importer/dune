@@ -6,11 +6,11 @@
 ; The stdlib still comes from extra_sys_path (no stdlib bundle here).
 
 (rule
- (copy ../../src/cpython/cflags.sexp cflags.sexp))
+ (copy ../../src/cflags.sexp cflags.sexp))
 
 (rule
  (deps
-  ../../src/cpython/cflags.sexp
+  ../../src/cflags.sexp
   ../../toolchain/sboa.config
   (env_var SBOA_CONFIG))
  (action
@@ -21,7 +21,7 @@
 (rule
  (targets frozen.c)
  (deps
-  ../../src/cpython/cflags.sexp
+  ../../src/cflags.sexp
   ../../toolchain/sboa.config
   (:tool ../../tools/sboa_bundle.py)
   (:importer ../../python/_sboa_importer.py)
@@ -43,7 +43,7 @@
 (rule
  (targets demo_bundle.ml demo_bundle.zip demo_bundle_blob.c)
  (deps
-  ../../src/cpython/cflags.sexp
+  ../../src/cflags.sexp
   ../../toolchain/sboa.config
   (:tool ../../tools/sboa_bundle.py)
   (source_tree demopkg)
@@ -69,7 +69,7 @@
 (executable
  (name importer_prog)
  (modules importer_prog demo_bundle)
- (libraries sboa sboa.cpython sboa.toolchain)
+ (libraries sboa)
  (foreign_stubs
   (language c)
   (names demo_bundle_blob frozen)
@@ -88,5 +88,4 @@
    (progn
     (run %{exe:importer_prog.exe} ok)
     (run %{exe:importer_prog.exe} empty)
-    (run %{exe:importer_prog.exe} truncated)
-    (run %{exe:importer_prog.exe} dynload)))))
+    (run %{exe:importer_prog.exe} truncated)))))

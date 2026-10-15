@@ -1,19 +1,19 @@
 ; Tests for sboa. `make test` runs them; so does any
 ; @runtest that reaches this directory. The CPython they use is the one
-; sboa.cpython links (probe.sh: ../toolchain/sboa.config, or
+; sboa links (probe.sh: ../toolchain/sboa.config, or
 ; SBOA_CONFIG; SBOA_PYTHON overrides the interpreter
 ; that compiles the test's frozen table). The tests have no stdlib bundle:
 ; they put the stdlib directory (SBOA_STDLIB) on sys.path.
 ;
-; ../src/cpython/cflags.sexp stands for "the CPython in use" in the deps
+; ../src/cflags.sexp stands for "the CPython in use" in the deps
 ; below: it is regenerated when the toolchain config changes.
 
 (rule
- (copy ../src/cpython/cflags.sexp cflags.sexp))
+ (copy ../src/cflags.sexp cflags.sexp))
 
 (rule
  (deps
-  ../src/cpython/cflags.sexp
+  ../src/cflags.sexp
   ../toolchain/sboa.config
   (env_var SBOA_CONFIG))
  (action
@@ -27,7 +27,7 @@
 (rule
  (targets frozen.c)
  (deps
-  ../src/cpython/cflags.sexp
+  ../src/cflags.sexp
   ../toolchain/sboa.config
   (:tool ../tools/sboa_bundle.py)
   (:probe frozen_probe.py)
@@ -55,7 +55,7 @@
  (enabled_if
   (<> %{os_type} Win32))
  (modules test_sboa)
- (libraries sboa sboa.cpython alcotest threads.posix unix)
+ (libraries sboa alcotest threads.posix unix)
  (foreign_stubs
   (language c)
   (names test_blob frozen)
@@ -74,9 +74,4 @@
 (executable
  (name exit_prog)
  (modules exit_prog)
- (libraries sboa sboa.cpython unix))
-
-(test
- (name test_disabled)
- (modules test_disabled)
- (libraries sboa sboa.disabled alcotest))
+ (libraries sboa unix))

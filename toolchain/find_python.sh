@@ -2,7 +2,7 @@
 # find_python.sh OUT_DIR
 #
 # Finds the CPython 3.13 that sboa builds against and runs describe.py with
-# it, which writes OUT_DIR/sboa.config and OUT_DIR/sboa_toolchain_data.ml.
+# it, which writes OUT_DIR/sboa.config.
 # Run by the rule in ./dune. sboa never downloads CPython: it must already be
 # installed. The interpreter is, in order:
 #

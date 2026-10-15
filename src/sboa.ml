@@ -13,7 +13,7 @@
 (* sboa: the OCaml side of the CPython bridge.
 
    All bridge logic lives here; [Backend] is the primitive layer (C stubs in
-   sboa.cpython, [Not_available] in sboa.disabled). The pieces:
+   the C stubs). The pieces:
 
    - GIL scopes: [with_gil] -> Backend.gil_ensure/gil_release (which also
      drain the deferred DECREF/root queues); [detach] -> save/restore thread.
@@ -55,35 +55,13 @@ let protect ~finally f =
 (* ------------------------------------------------------------------------ *)
 
 module Config = struct
-  type t = {
-    program_name : string;
-    argv : string list;
-    home : string option;
-    extra_sys_path : string list;
-    dev_overrides : string list;
-    libdynload_dir : string option;
-    handle_signals : bool;
-  }
+  type t = { extra_sys_path : string list; dev_overrides : string list }
 
-  let default () =
-    {
-      program_name = Sys.executable_name;
-      argv = [ Sys.executable_name ];
-      home = None;
-      extra_sys_path = [];
-      dev_overrides = [];
-      libdynload_dir = None;
-      handle_signals = true;
-    }
+  let default () = { extra_sys_path = []; dev_overrides = [] }
 
   let equal a b =
-    String.equal a.program_name b.program_name
-    && List.equal String.equal a.argv b.argv
-    && Option.equal String.equal a.home b.home
-    && List.equal String.equal a.extra_sys_path b.extra_sys_path
+    List.equal String.equal a.extra_sys_path b.extra_sys_path
     && List.equal String.equal a.dev_overrides b.dev_overrides
-    && Option.equal String.equal a.libdynload_dir b.libdynload_dir
-    && Bool.equal a.handle_signals b.handle_signals
 end
 
 (* ------------------------------------------------------------------------ *)
@@ -104,7 +82,6 @@ type conv_error = { path : path_elt list; expected : string; got : string }
 exception Python_error of Python_error.t
 exception Conversion_error of conv_error
 exception System_exit of int
-exception Not_available = B.Not_available
 
 let path_to_string path =
   path
@@ -342,13 +319,9 @@ let init_args (c : Config.t) : B.init_args =
     entries |> Array.to_list |> List.mapi f |> List.filter_map Fun.id
   in
   {
-    program_name = c.program_name;
-    argv = Array.of_list c.argv;
-    home = c.home;
+    program_name = Sys.executable_name;
     sys_path = Array.of_list c.extra_sys_path;
-    libdynload_dir = c.libdynload_dir;
     dev_overrides = Array.of_list c.dev_overrides;
-    handle_signals = c.handle_signals;
     functions =
       select (fun i e ->
           match e.e_kind with

@@ -10,7 +10,7 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
    LICENSE for more details.
 *)
-(* Tests for sboa.cpython.
+(* Tests for sboa.
 
    One process initializes Python once (with Sys.catch_break set first so
    SIGINT/SIGTERM are routed) and runs every scenario in order; the exit test

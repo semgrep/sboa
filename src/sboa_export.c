@@ -583,11 +583,10 @@ struct bundle {
 };
 static struct bundle *bundles = NULL;
 static int n_bundles = 0;
-static char *libdynload_dir = NULL;
 static char **dev_overrides = NULL;
 static int n_dev_overrides = 0;
 
-void sboa_module_setup(value v_bundles, value v_dynload, value v_dev) {
+void sboa_module_setup(value v_bundles, value v_dev) {
   n_bundles = Wosize_val(v_bundles);
   bundles = calloc(n_bundles + 1, sizeof *bundles);
   if (bundles == NULL) caml_raise_out_of_memory();
@@ -599,7 +598,6 @@ void sboa_module_setup(value v_bundles, value v_dynload, value v_dev) {
     bundles[i].data = Caml_ba_data_val(ba);
     bundles[i].size = Caml_ba_array_val(ba)->dim[0];
   }
-  libdynload_dir = Is_some(v_dynload) ? dup_ml(Some_val(v_dynload)) : NULL;
   n_dev_overrides = Wosize_val(v_dev);
   dev_overrides = calloc(n_dev_overrides + 1, sizeof(char *));
   if (dev_overrides == NULL) caml_raise_out_of_memory();
@@ -625,17 +623,15 @@ static PyObject *py_bundles(PyObject *self, PyObject *unused) {
   return l;
 }
 
-/* _sboa.libdynload_dir(): the configured directory, or by default the
-   layout the runtime files are installed in next to the executable:
+/* _sboa.libdynload_dir(): the layout the runtime files are installed in
+   next to the executable:
    <dirname(sys.executable)>/libs/pythonX.Y/lib-dynload on unix, and the
    executable's own directory on Windows (python3XY.dll and the *.pyd
    extension modules sit flat next to the .exe, as DLL search requires);
    None if that is not an existing directory. */
 static PyObject *py_libdynload_dir(PyObject *self, PyObject *unused) {
   PyObject *dir;
-  if (libdynload_dir != NULL) {
-    dir = PyUnicode_DecodeFSDefault(libdynload_dir);
-  } else {
+  {
     PyObject *exe = PySys_GetObject("executable"); /* borrowed */
     if (exe == NULL || !PyUnicode_Check(exe) || PyUnicode_GET_LENGTH(exe) == 0)
       Py_RETURN_NONE;

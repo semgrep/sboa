@@ -56,24 +56,21 @@
     disposition is inherited by child processes, so code that spawns
     programs expecting the default should reset it in the child.
 
-    This library knows nothing about any particular application. The
-    implementation must be chosen explicitly by every executable that links
-    [sboa] (there is no default): [sboa.cpython] or [sboa.disabled],
-    where {!init} and {!with_gil} raise {!Not_available}. *)
+    This library knows nothing about any particular application. *)
 
 type gil
 (** Proof that the calling thread holds the GIL. See "Tokens" above. *)
 
-(** Interpreter configuration. *)
+(** Interpreter configuration. What is not configurable: [sys.executable]
+    and the program name are [Sys.executable_name], [sys.argv] starts as
+    [[Sys.executable_name]] (the application sets the real one), the bundle
+    importer loads C extension modules from
+    [<dir of executable>/libs/python3.X/lib-dynload] on unix and from the
+    directory of the executable on Windows (the runtime files are installed
+    flat next to the [.exe]; the importer gets [None] if the directory does
+    not exist), and SIGINT/SIGTERM are routed as described above. *)
 module Config : sig
   type t = {
-    program_name : string;
-        (** [sys.executable] and the program name; default
-            [Sys.executable_name]. *)
-    argv : string list;  (** [sys.argv]; default [[program_name]]. *)
-    home : string option;
-        (** [PyConfig.home] (the Python prefix); default [None]. Only affects
-            [sys.prefix]: the module search path is never derived from it. *)
     extra_sys_path : string list;
         (** The initial [sys.path] (empty by default: code comes from the
             embedded bundles). For development and tests, e.g. a stdlib
@@ -81,14 +78,6 @@ module Config : sig
     dev_overrides : string list;
         (** Directories whose sources take precedence over the bundles;
             passed to the bundle importer. *)
-    libdynload_dir : string option;
-        (** Where the bundle importer loads C extension modules from; default
-            [<dir of executable>/libs/python3.X/lib-dynload] on unix and the
-            directory of the executable on Windows (the runtime files are
-            installed flat next to the [.exe]). The importer gets [None] if
-            the directory does not exist. *)
-    handle_signals : bool;
-        (** Route SIGINT/SIGTERM as described above; default [true]. *)
   }
 
   val default : unit -> t
@@ -309,9 +298,6 @@ exception Conversion_error of Conv.error
 
 exception System_exit of int
 (** [SystemExit] reached OCaml; the payload is the exit status. *)
-
-exception Not_available
-(** Raised by the [sboa.disabled] implementation. *)
 
 (** OCaml values exposed to Python as instances of an exported class. *)
 module Class : sig
