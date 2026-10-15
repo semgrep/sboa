@@ -23,8 +23,8 @@ or newer.
 ## Where CPython comes from
 
 sboa never downloads anything. Like `ocurl` with libcurl, it builds against
-an installed CPython 3.13, found by `config/discover.ml` (dune-configurator)
-in this order:
+an installed CPython 3.13, found by `sboa-bundle discover` (which sboa's own
+build runs first, and an application can run too) in this order:
 
 1. `SBOA_PYTHON=<interpreter>` (a path, or a name looked up on `PATH`);
 2. `SBOA_PREFIX=<installation prefix>` (absolute): its `bin/python3.13`,
@@ -36,9 +36,11 @@ in this order:
 An interpreter named by 1 or 2 must do; 3 to 5 are tried in turn. It must be
 CPython 3.13.x with a shared libpython (`--enable-shared`, a distribution's
 `-dev`/`-devel` package, a framework build on macOS; always the case on
-Windows), without free threading and without `Py_DEBUG`; otherwise the build
-stops, says why for each candidate and lists the five ways to point at
-another one.
+Windows), without free threading and without `Py_DEBUG`; each candidate
+runs `sboa-bundle describe`, which checks it and writes `sboa.config`.
+Otherwise the build stops, says why for each candidate and lists the five
+ways to point at another one. `discover [--out sboa.config] [--cflags F]
+[--link F] [--clibs F]` also writes the flag files of `flags` (below).
 
 On a machine without one, either install the distribution's package (the
 opam file declares it as a depext where the OS packages a 3.13:
@@ -64,7 +66,7 @@ sboa`). Inside a dune workspace the discovery re-runs when `SBOA_PYTHON`,
 
 ## `sboa.config`
 
-Written by `sboa-bundle describe` (which discover runs). One sexp, a list
+Written by `sboa-bundle describe` (which `discover` runs). One sexp, a list
 of `(field value)` pairs, UTF-8 with LF line ends; strings except
 `runtime_files` (a list of `(source destination)` pairs). Paths are
 absolute, with forward slashes; values containing `"`, `)`, a backslash or
@@ -83,15 +85,16 @@ a control character are refused. Readers must ignore unknown fields.
 
 ## Using sboa from dune
 
-Dune rules run the tool as `%{bin:sboa-bundle}`: it runs `sboa_bundle.py`
-under the CPython sboa was built against, and every subcommand given
-`--config C` does its work under C's interpreter (bytecode is only valid
-for the interpreter that compiled it), so a build needs no other Python.
+Dune rules run the tool as `%{bin:sboa-bundle}`. Every subcommand but
+`discover` runs `sboa_bundle.py` under the `python_exe` of `--config C`
+(bytecode is only valid for the interpreter that compiled it), or, without
+`--config`, of the installed `sboa.config`: a build needs no other Python.
 
 | Subcommand | |
 |---|---|
+| `discover [--out F] [--cflags F] [--link F] [--clibs F]` | find a CPython 3.13 as above and write its config (and flag files) |
 | `describe --prefix P --out F` | write the config of the installation at P (`--python EXE` for a given interpreter) |
-| `flags --config C --cflags\|--link\|--clibs` | print a dune `(:include)` sexp: `-I` of the headers; libpython by full path and the rpaths for an executable's `link_flags` (`-cclib`/`-ccopt`); the same for a library's `c_library_flags` |
+| `flags --config C --cflags\|--link\|--clibs` | print a dune `(:include)` sexp: `-I` of the headers; libpython by full path and the rpaths for an executable's `link_flags` (`-cclib`/`-ccopt`); the `sboa` library's `c_library_flags` (empty except the import library on Windows) |
 | `exec --config C -- ARGS...` | run C's interpreter |
 | `freeze`, `stdlib`, `bundle`, `embed`, `runtime-files`, `check-seam`, `fetch-wheels` | the recipe below; `sboa-bundle --help` and `sboa-bundle CMD --help` |
 
@@ -105,9 +108,18 @@ config. Either ship the one sboa was built against:
  (copy %{lib:sboa:sboa.config} cpython.config))
 ```
 
+or find one the way sboa does (the config records absolute paths and depends
+on the environment: no sandbox):
+
+```dune
+(rule
+ (targets cpython.config)
+ (deps (env_var SBOA_PYTHON) (env_var SBOA_PREFIX) (sandbox none))
+ (action (run %{bin:sboa-bundle} discover --out %{targets})))
+```
+
 or describe the installation it ships, e.g. a directory target `cpython`
-that a rule fills with `uv python install --install-dir` (the config records
-absolute paths: no sandbox):
+that a rule fills with `uv python install --install-dir`:
 
 ```dune
 (rule
@@ -268,9 +280,9 @@ e.g. `uv python install 3.13 && opam install sboa`.
 
 ### devenv
 
-[devenv](https://devenv.sh) provides everything (OCaml, dune,
-dune-configurator, alcotest, ocamlformat, CPython 3.13 with pytest,
-`SBOA_PREFIX` set to nixpkgs' `python313`):
+[devenv](https://devenv.sh) provides everything (OCaml, dune, alcotest,
+ocamlformat, CPython 3.13 with pytest, `SBOA_PREFIX` set to nixpkgs'
+`python313`):
 
 ```bash
 devenv shell   # or `direnv allow` with the provided .envrc

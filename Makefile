@@ -1,5 +1,5 @@
 # Build and test sboa. The CPython 3.13 it builds against is found by
-# config/discover.ml (SBOA_PYTHON, SBOA_PREFIX, python3.13 on PATH,
+# `sboa-bundle discover` (SBOA_PYTHON, SBOA_PREFIX, python3.13 on PATH,
 # `uv python find 3.13`, python3 if it is 3.13; see README.md).
 
 DUNE ?= dune

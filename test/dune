@@ -1,14 +1,14 @@
 ; Tests for sboa. `make test` runs them; so does any @runtest that reaches
 ; this directory. The CPython they use is the one sboa was built against
-; (../config/sboa.config); they link it with ../config/link.sexp. The tests
+; (../tools/sboa.config); they link it with ../tools/link.sexp. The tests
 ; have no stdlib bundle: they put the stdlib directory (SBOA_STDLIB) on
 ; sys.path (recipe/ is the test with the bundles an application builds).
 
 (rule
- (copy ../config/cflags.sexp cflags.sexp))
+ (copy ../tools/cflags.sexp cflags.sexp))
 
 (rule
- (copy ../config/link.sexp link.sexp))
+ (copy ../tools/link.sexp link.sexp))
 
 (rule
  (with-stdout-to
@@ -17,7 +17,7 @@
    %{bin:sboa-bundle}
    exec
    --config
-   %{dep:../config/sboa.config}
+   %{dep:../tools/sboa.config}
    --
    -I
    -c
@@ -32,7 +32,7 @@
   (run
    %{bin:sboa-bundle}
    --config
-   %{dep:../config/sboa.config}
+   %{dep:../tools/sboa.config}
    freeze
    --module
    _sboa_frozen_probe=%{dep:frozen_probe.py}

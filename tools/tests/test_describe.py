@@ -183,6 +183,7 @@ def test_describe_this_interpreter(tmp_path: Path) -> None:
     assert tool("flags", "--config", str(cfg_file), "--cflags") == (
         f'("-I{cfg["incdir"]}")\n'
     )
+    assert tool("flags", "--config", str(cfg_file), "--clibs") == "()\n"
     link = tool("--config", str(cfg_file), "flags", "--link")
     assert link.startswith(f'("-cclib" "{cfg["lib_file"]}" "-ccopt" ')
     out = tool(

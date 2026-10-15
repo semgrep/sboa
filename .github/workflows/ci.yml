@@ -40,7 +40,7 @@ jobs:
       - name: devenv test
         run: devenv test
 
-  # The way an application consumes sboa: opam with OCaml 5.3. discover
+  # The way an application consumes sboa: opam with OCaml 5.3. `sboa-bundle discover`
   # finds the CPython 3.13 of actions/setup-python as python3.13 on PATH on
   # Linux and macOS; on Windows (python.exe, no python3.13) through
   # SBOA_PREFIX.
@@ -91,7 +91,7 @@ jobs:
         run: uv run --no-project --python 3.13 --with pytest python -m pytest tools/tests -q
 
   # A machine with uv and no CPython 3.13 (the runner's python3 is 3.12):
-  # `uv python install 3.13` is all it takes, discover finds it with
+  # `uv python install 3.13` is all it takes, `sboa-bundle discover` finds it with
   # `uv python find` (--no-bin: no python3.13 on PATH, so that this job
   # proves that path).
   opam-uv:

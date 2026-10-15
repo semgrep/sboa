@@ -11,7 +11,6 @@ bug-reports: "https://github.com/semgrep/sboa/issues"
 depends: [
   "dune" {>= "3.5"}
   "ocaml" {>= "5.3"}
-  "dune-configurator"
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]

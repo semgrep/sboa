@@ -2115,14 +2115,17 @@ def cmd_flags(args: argparse.Namespace) -> None:
     cfg = need_config(args, "flags")
     if args.what == "cflags":
         flags = [f"-I{config_str(cfg, 'incdir')}"]
+    elif args.what == "clibs":
+        # A Windows DLL (the bytecode stub library) cannot have undefined
+        # symbols: there, the library links the import library, which binds
+        # by DLL name (python313.dll next to the .exe), not by path.
+        # Elsewhere the application links libpython (--link).
+        plat = config_str(cfg, "platform")
+        flags = [config_str(cfg, "lib_file")] if plat.startswith("windows") else []
     else:
-        items = link_items(cfg)
-        if args.what == "clibs":
-            flags = [f for _, f in items]
-        else:
-            flags = []
-            for kind, f in items:
-                flags += ["-cclib" if kind == "lib" else "-ccopt", f]
+        flags = []
+        for kind, f in link_items(cfg):
+            flags += ["-cclib" if kind == "lib" else "-ccopt", f]
     text = dune_sexp(flags)
     if args.out is None:
         sys.stdout.write(text)
@@ -2396,7 +2399,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="what",
         action="store_const",
         const="clibs",
-        help="the same flags for a library's c_library_flags",
+        help="the sboa library's c_library_flags: empty, except the import"
+        " library on Windows",
     )
     fl.add_argument("--out", type=Path, help="write to this file (default: stdout)")
     fl.set_defaults(func=cmd_flags)

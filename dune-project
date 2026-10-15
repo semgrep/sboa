@@ -26,5 +26,4 @@
  (depends
   (ocaml
    (>= 5.3))
-  dune-configurator
   (alcotest :with-test)))

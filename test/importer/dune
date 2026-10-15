@@ -6,7 +6,7 @@
 ; comes from extra_sys_path (no stdlib bundle here).
 
 (rule
- (copy ../../config/link.sexp link.sexp))
+ (copy ../../tools/link.sexp link.sexp))
 
 (rule
  (with-stdout-to
@@ -15,7 +15,7 @@
    %{bin:sboa-bundle}
    exec
    --config
-   %{dep:../../config/sboa.config}
+   %{dep:../../tools/sboa.config}
    --
    -I
    -c
@@ -27,7 +27,7 @@
   (run
    %{bin:sboa-bundle}
    --config
-   %{dep:../../config/sboa.config}
+   %{dep:../../tools/sboa.config}
    freeze
    --module
    _sboa_importer=%{dep:../../python/_sboa_importer.py}
@@ -42,7 +42,7 @@
   (run
    %{bin:sboa-bundle}
    --config
-   %{dep:../../config/sboa.config}
+   %{dep:../../tools/sboa.config}
    bundle
    --name
    demo

@@ -1,7 +1,7 @@
 ; The sboa library. All logic lives in [Sboa] (sboa.ml); [Backend] is the
 ; primitive layer: C stubs against Python.h (sboa_runtime.c, sboa_object.c,
 ; sboa_export.c), compiled against the headers of the CPython found by
-; ../config/discover.ml. The library carries no libpython link flags (except
+; `sboa-bundle discover` (../tools/dune). The library carries no libpython link flags (except
 ; the import library on Windows, bound by DLL name): an
 ; application links the CPython it ships (README.md, "Linking libpython").
 
@@ -24,12 +24,12 @@
     -Wextra
     -Wno-unused-parameter
     (:include cflags.sexp))))
- ; empty except on Windows (../config/dune)
+ ; empty except on Windows (../tools/dune)
  (c_library_flags
   (:include clibs.sexp)))
 
 (rule
- (copy ../config/cflags.sexp cflags.sexp))
+ (copy ../tools/cflags.sexp cflags.sexp))
 
 (rule
- (copy ../config/clibs.sexp clibs.sexp))
+ (copy ../tools/clibs.sexp clibs.sexp))

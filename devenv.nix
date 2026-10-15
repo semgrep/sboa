@@ -17,7 +17,6 @@ in
   packages = [
     ocamlPackages.dune_3
     ocamlPackages.alcotest
-    ocamlPackages.dune-configurator
     ocamlPackages.findlib
     pkgs.ocamlformat_0_29_0
     (python.withPackages (ps: [ ps.pytest ]))
@@ -25,7 +24,7 @@ in
     pkgs.gnumake
   ];
 
-  # The CPython sboa builds against (config/discover.ml; see README.md).
+  # The CPython sboa builds against (`sboa-bundle discover`; see README.md).
   env.SBOA_PREFIX = "${python}";
 
   enterShell = ''
