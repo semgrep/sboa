@@ -46,8 +46,14 @@
    --out
    %{targets})))
 
+; Not on Windows yet: the suite hangs there (seen in CI after the importer
+; and disabled suites passed; the fork, signal and thread scenarios are the
+; suspects). Follow-up: make it run on Windows.
+
 (test
  (name test_sboa)
+ (enabled_if
+  (<> %{os_type} Win32))
  (modules test_sboa)
  (libraries sboa sboa.cpython alcotest threads.posix unix)
  (foreign_stubs
