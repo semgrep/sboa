@@ -1,0 +1,12 @@
+; The [@@deriving sboa] deriver (sboa.ppx): converters in the Sboa.Conv style
+; for type declarations. See ppx_sboa.mli and README.md ("Deriving
+; converters").
+
+(library
+ (name ppx_sboa)
+ (public_name sboa.ppx)
+ (kind ppx_deriver)
+ (libraries ppxlib)
+ (ppx_runtime_libraries sboa)
+ (preprocess
+  (pps ppxlib.metaquot)))

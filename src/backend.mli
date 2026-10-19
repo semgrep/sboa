@@ -289,6 +289,10 @@ val set_error_system_exit : int -> unit
 val set_error_ocaml : string -> exn * Printexc.raw_backtrace -> unit
 (** [_sboa.OCamlError(msg)] carrying a capsule that roots the pair. *)
 
+val set_error_ocaml_obj : obj -> exn * Printexc.raw_backtrace -> unit
+(** Raise the given instance of an [OCamlError] subclass, carrying a capsule
+    that roots the pair like {!set_error_ocaml}. *)
+
 (** {2 Exports} *)
 
 val frame_args : unit -> obj array

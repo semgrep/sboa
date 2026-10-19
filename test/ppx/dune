@@ -1,0 +1,37 @@
+; Tests of the [@@deriving sboa] deriver and the typed exports: round trips
+; per supported shape, conversion errors, and the README's worked example
+; (demo.ml, demo.py, demo.pyi), which must appear verbatim in ../../README.md.
+; Not on Windows, like ../test_sboa (see ../dune).
+
+(rule
+ (copy ../../tools/link.sexp link.sexp))
+
+(rule
+ (with-stdout-to
+  stdlib_dir
+  (run
+   %{bin:sboa-bundle}
+   exec
+   --config
+   %{dep:../../tools/sboa.config}
+   --
+   -I
+   -c
+   "import sysconfig; print(sysconfig.get_path('stdlib'))")))
+
+(test
+ (name test_ppx)
+ (enabled_if
+  (<> %{os_type} Win32))
+ (modules test_ppx demo shapes)
+ (libraries sboa alcotest)
+ (preprocess
+  (pps sboa.ppx))
+ (link_flags
+  (:include link.sexp))
+ (deps stdlib_dir demo.py demo.pyi demo.ml ../../README.md)
+ (action
+  (setenv
+   SBOA_STDLIB
+   %{read-lines:stdlib_dir}
+   (run %{test} --color=never))))

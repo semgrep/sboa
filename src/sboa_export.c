@@ -46,7 +46,11 @@
    so any Python thread may read it without entering OCaml); OCaml updates
    it from any domain through the [@@noalloc] stubs below, which take the
    address of the atomic and never touch Python or the OCaml runtime. Every
-   export module re-exports the type as <module>.Counter. */
+   export module re-exports the type as <module>.Counter.
+
+   Record classes (Sboa.Conv.record): plain Python classes that OCaml
+   creates; a module that holds some has a hidden __sboa_init__ export,
+   which make_module calls with the new module and then deletes. */
 #include "sboa_internal.h"
 
 #include <string.h>
@@ -247,6 +251,17 @@ static PyObject *make_module(int k) {
   if (counter_type != NULL && !PyObject_HasAttrString(m, "Counter") &&
       PyModule_AddObjectRef(m, "Counter", counter_type) != 0)
     goto fail;
+  /* The record classes of the module: set by its hidden init function
+     (Sboa's __sboa_init__, registered with them), called once and removed. */
+  PyObject *hook = NULL;
+  if (PyObject_GetOptionalAttrString(m, "__sboa_init__", &hook) < 0) goto fail;
+  if (hook != NULL) {
+    PyObject *r = PyObject_CallOneArg(hook, m);
+    Py_DECREF(hook);
+    if (r == NULL) goto fail;
+    Py_DECREF(r);
+    if (PyObject_DelAttrString(m, "__sboa_init__") != 0) goto fail;
+  }
   Py_DECREF(modname);
   return m;
 fail:

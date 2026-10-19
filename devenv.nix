@@ -7,7 +7,7 @@ let
   python = pkgs.python313;
 in
 {
-  # OCaml 5.4, dune, alcotest, ocamlformat; CPython 3.13 (nixpkgs builds it
+  # OCaml 5.4, dune, ppxlib, alcotest, ocamlformat; CPython 3.13 (nixpkgs builds it
   # with a shared libpython) is what sboa builds against.
   languages.ocaml = {
     enable = true;
@@ -16,6 +16,7 @@ in
 
   packages = [
     ocamlPackages.dune_3
+    ocamlPackages.ppxlib
     ocamlPackages.alcotest
     ocamlPackages.findlib
     pkgs.ocamlformat_0_29_0

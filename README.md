@@ -8,6 +8,7 @@ executable. It installs:
 | What | |
 |---|---|
 | the `sboa` library | the bridge: GIL tokens, owned object handles with deferred release, fallible conversions, OCaml functions and classes exported as builtin Python modules, exception translation both ways, signal routing, atomic counters (`src/sboa.mli`) |
+| the `sboa.ppx` deriver | `[@@deriving sboa]`: converters for OCaml types, records as Python classes (below) |
 | the `sboa-bundle` tool | builds what an application ships with the library: the frozen-module table, the embedded standard library, Python bundles of packages or wheels, the runtime files; also describes a CPython installation (`sboa.config`) and prints its compiler and link flags |
 | `lib/sboa/sboa.config` | the CPython sboa was built against |
 | `lib/sboa/_sboa_importer.py` | the bundle importer, frozen into the application's frozen-module table |
@@ -19,6 +20,137 @@ the application with the tool, from a three-rule recipe (below).
 Supported: Linux (glibc and musl) and macOS on x86_64 and arm64, Windows
 x86_64 with the mingw-w64 OCaml port (gcc; MSVC is not supported). OCaml 5.3
 or newer.
+
+## Exporting OCaml to Python: a worked example
+
+`[@@deriving sboa]` (the `sboa.ppx` deriver) gives an OCaml type a
+converter, `Sboa.Export.def` registers a function with typed parameters
+(no argument parsing by hand), and `Sboa.Export.stub` writes the `.pyi`.
+This is `test/ppx/demo.ml`, `demo.py` and `demo.pyi`: `make test` runs
+them and checks that this section shows them as they are.
+
+```dune
+(executable
+ (name main)
+ (libraries sboa)
+ (preprocess (pps sboa.ppx))
+ (link_flags (:include link.sexp)))
+```
+
+```ocaml
+type run_result = { output : string; exit_code : int; log : string }
+[@@deriving sboa]
+(** What run did. *)
+
+type run_error = { message : string; exit_code : int }
+[@@deriving sboa] [@@sboa.exception]
+(** Why run failed. *)
+
+exception Run_error of run_error
+
+let run argv verbose =
+  match argv with
+  | [] -> raise (Run_error { message = "nothing to run"; exit_code = 2 })
+  | cmd :: _ ->
+      let log = if verbose = Some true then "ran " ^ cmd else "" in
+      { output = String.concat " " argv; exit_code = 0; log }
+
+let () =
+  let open Sboa.Export in
+  def ~module_:"_demo" ~name:"run" ~doc:"Run argv."
+    (pos "argv" Sboa.Conv.(list string)
+    @-> kw_opt "verbose" Sboa.Conv.bool
+    @-> returning run_result_conv)
+    run;
+  register_exception ~module_:"_demo" run_error_conv (function
+    | Run_error e -> Some e
+    | _ -> None)
+```
+
+In Python (`_demo` is a builtin module of the executable):
+
+```python
+import _demo
+
+r = _demo.run(["echo", "hi"], verbose=True)
+assert (r.output, r.exit_code, r.log) == ("echo hi", 0, "ran echo")
+assert repr(r) == "RunResult(output='echo hi', exit_code=0, log='ran echo')"
+assert r == _demo.RunResult("echo hi", 0, log="ran echo")
+match r:
+    case _demo.RunResult(output, 0, _):
+        assert output == "echo hi"
+
+try:
+    _demo.run([])
+except _demo.RunError as e:
+    assert (e.message, e.exit_code) == ("nothing to run", 2)
+    assert isinstance(e, _demo.OCamlError)
+```
+
+`Sboa.Export.stub "_demo"`, after the `OCamlError` and `Counter` classes
+that every export module has:
+
+```python
+class RunResult:
+    """What run did."""
+    output: str
+    exit_code: int
+    log: str
+    def __init__(self, output: str, exit_code: int, log: str) -> None: ...
+
+class RunError(OCamlError):
+    """Why run failed."""
+    message: str
+    exit_code: int
+    def __init__(self, message: str, exit_code: int) -> None: ...
+
+def run(argv: list[str], /, *, verbose: bool | None = None) -> RunResult:
+    """Run argv."""
+```
+
+### What the ppx supports
+
+For `type foo = ...`, `[@@deriving sboa]` defines `foo_conv : foo
+Sboa.Conv.t` (`conv` for a type `t`); a type parameter becomes an argument,
+`'a box` gives `box_conv : 'a Sboa.Conv.t -> 'a box Sboa.Conv.t`. In an
+`.mli` it declares the same value.
+
+| OCaml | Python |
+|---|---|
+| `int`, `float`, `bool` | `int`, `float` (an `int` is accepted), `bool` |
+| `string` | `str` (UTF-8); `bytes` with `[@sboa.bytes]` |
+| `bytes` | `bytes` |
+| `unit` | `None` |
+| `'a option` | `None` or the value |
+| `'a list`, `'a array` | `list` (a `tuple` is accepted) |
+| tuples of 2 to 4 elements | `tuple` (a `list` is accepted) |
+| a record | an instance of its class: attributes named after the fields, a constructor taking them by position or keyword, a `repr` like `RunResult(output='', exit_code=0, log='')`, `__match_args__`; frozen, equality and hash by value. Any object with the attributes converts back. |
+| a record with `[@@sboa.exception]` | an exception class, subclass of `OCamlError` (`args` is the field values); with `Export.register_exception` the OCaml exception escapes as it, and is re-raised as itself if it crosses back into OCaml |
+| a variant | a constructor without arguments is its name, `"Empty"`; one with arguments a tuple, `("Circle", 1.5)`, `("Rect", p1, p2)` |
+| a type variable `'a` | the converter argument |
+| `t`, `foo`, `M.t`, `M.foo` (applied to arguments) | `conv`, `foo_conv`, `M.conv`, `M.foo_conv` (applied to their converters), e.g. `Sboa.Counter.conv` |
+| `[@sboa.conv e]` on a type or a field | the converter `e`, e.g. `Sboa.Conv.object_` |
+
+A record's class is named after the type in CamelCase (`run_result` ->
+`RunResult`; a type `t` after its module), or `[@@sboa.name "Name"]`; its
+docstring is the type's doc comment; `[@sboa.name "attr"]` renames a field
+or a constructor. The class is created once and registered in the export
+modules whose functions mention it (`Export.register_type` for others).
+Not supported: recursive types, inline records, polymorphic variants,
+GADTs, objects and functions as fields (`Sboa.Conv.func1`... by hand).
+
+Typed exports (`src/sboa.mli`, `Export`): `pos name conv` (positional-only),
+`kw name conv` (keyword-only), `kw_opt name conv` (keyword-only, `None` by
+default, an `option` argument), `unit` (no argument), chained with `@->`
+and ended by `returning conv`; `def ~detach:true` runs the function with
+the GIL released. The text signature (`inspect.signature`) and the stub
+follow: `run(argv, /, *, verbose=None)`.
+
+The registry lives in the program, so the stub comes from the program: a
+mode or a small executable that links the same modules and prints
+`Sboa.Export.stub "_demo"`, run by a rule such as `(rule (with-stdout-to
+_demo.pyi (run %{exe:print_stub.exe})))` (`sboa-bundle` runs under the
+build CPython and never sees the OCaml registry, so it cannot write it).
 
 ## Where CPython comes from
 
@@ -268,7 +400,7 @@ e.g. `let _ = App_bundle.bundle`, or link with `-linkall`).
 
 ```bash
 make             # dune build @install
-make test        # alcotest suites, importer test, the recipe
+make test        # alcotest suites (and the worked example), importer test, the recipe
 make test-tools  # the tool's pytest suite (python3 -m pytest)
 make fmt-check   # ocamlformat
 ```
@@ -280,8 +412,8 @@ e.g. `uv python install 3.13 && opam install sboa`.
 
 ### devenv
 
-[devenv](https://devenv.sh) provides everything (OCaml, dune, alcotest,
-ocamlformat, CPython 3.13 with pytest, `SBOA_PREFIX` set to nixpkgs'
+[devenv](https://devenv.sh) provides everything (OCaml, dune, ppxlib,
+alcotest, ocamlformat, CPython 3.13 with pytest, `SBOA_PREFIX` set to nixpkgs'
 `python313`):
 
 ```bash
