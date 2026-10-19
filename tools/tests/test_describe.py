@@ -15,6 +15,7 @@ runtime-file listings (on fake installation trees, so the Windows layout is
 covered everywhere) and real runs against the interpreter running the tests."""
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -190,6 +191,32 @@ def test_describe_this_interpreter(tmp_path: Path) -> None:
         "exec", "--config", str(cfg_file), "--", "-c", "import sys; print(sys.prefix)"
     )
     assert out.strip() == sys.base_prefix
+
+    # Without --config: the sboa.config next to the script (as installed in
+    # lib/sboa/, or written next to it in a dune workspace).
+    installed = tmp_path / "lib" / "sboa"
+    installed.mkdir(parents=True)
+    shutil.copy(TOOL, installed / "sboa_bundle.py")
+    shutil.copy(cfg_file, installed / "sboa.config")
+
+    def installed_tool(*args: str) -> "subprocess.CompletedProcess[str]":
+        return subprocess.run(
+            [sys.executable, "-I", str(installed / "sboa_bundle.py"), *args],
+            capture_output=True,
+            text=True,
+        )
+
+    r = installed_tool("flags", "--link")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == link
+    r = installed_tool("exec", "--", "-c", "import sys; print(sys.prefix)")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == sys.base_prefix
+    (installed / "sboa.config").unlink()
+    for args in (("flags", "--cflags"), ("exec", "--", "-c", "pass")):
+        r = installed_tool(*args)
+        assert r.returncode != 0
+        assert f"{args[0]} needs --config (there is no " in r.stderr
 
 
 def test_describe_refuses_a_prefix_without_python(tmp_path: Path) -> None:

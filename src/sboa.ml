@@ -27,7 +27,15 @@
      with the GIL released; [dispatch] re-takes it, reads the call's
      arguments, runs the entry inside a fresh callable scope, and on any
      OCaml exception sets the Python error indicator ([set_python_error]) and
-     returns [None].
+     returns [None]. [Export.def] builds such an entry from a typed parameter
+     list (a GADT: the conversions run first, then the function);
+     [Import.def] uses the same lists the other way round (OCaml arguments
+     collected, then converted and passed to a cached Python callable).
+   - Records (what [[@@deriving sboa]] generates for record types): plain
+     Python classes made by a small factory written in Python
+     ([factory_source]); an export module that holds some gets a hidden
+     [__sboa_init__] entry, which the C module initializer calls once.
+   - Stubs: every registration also records what [Export.stub] prints.
 
    The registries, the [Import.cached] table and the current callable scope
    are global mutable state by necessity (registration is a link-time
@@ -253,7 +261,7 @@ module Pair_map = Map.Make (struct
     | c -> c
 end)
 
-module Import = struct
+module Import_ = struct
   let module_ () name =
     match B.import name with
     | m -> m
@@ -458,6 +466,96 @@ type scope = { mutable live : bool }
 let current_scope = Atomic.make { live = true }
 
 (* ------------------------------------------------------------------------ *)
+(* Record classes *)
+(* ------------------------------------------------------------------------ *)
+
+(* The Python class of a derived record type: created once, under the GIL
+   on the main thread (hence the mutable fields), when the first export
+   module that uses it is imported, or at the first conversion. *)
+type record_class = {
+  rc_name : string;
+  rc_doc : string;
+  rc_fields : string list;
+  rc_exception : bool;
+  mutable rc_tys : string list option;
+      (* the field types for stubs, from the first converter built *)
+  mutable rc_module : string option;
+      (* the first export module it was registered in: its __module__ *)
+  mutable rc_class : Object.t option;
+}
+
+(* The class factory, in Python: the classes need nothing but builtins (no
+   stdlib import, so they work before or without a stdlib bundle). Records
+   are frozen and compare and hash by value; exception classes subclass
+   _sboa.OCamlError, keep identity semantics, and pass the field values to
+   BaseException.__init__ (so [args] is the values in field order). *)
+let factory_source =
+  {|
+def make(module, name, doc, fields, base):
+    fields = tuple(fields)
+    n = len(fields)
+    record = base is object
+
+    def __init__(self, *args, **kwargs):
+        if len(args) > n:
+            raise TypeError(
+                f"{name}() takes {n} arguments but {len(args)} were given")
+        values = list(args)
+        for f in fields[len(args):]:
+            if f not in kwargs:
+                raise TypeError(f"{name}() missing argument {f!r}")
+            values.append(kwargs.pop(f))
+        if kwargs:
+            raise TypeError(
+                f"{name}() got an unexpected keyword argument "
+                f"{next(iter(kwargs))!r}")
+        for f, v in zip(fields, values):
+            object.__setattr__(self, f, v)
+        if not record:
+            base.__init__(self, *values)
+
+    def __repr__(self):
+        return name + "(" + ", ".join(
+            f"{f}={getattr(self, f)!r}" for f in fields) + ")"
+
+    ns = {
+        "__module__": module,
+        "__qualname__": name,
+        "__doc__": doc or None,
+        "__slots__": fields,
+        "__match_args__": fields,
+        "__init__": __init__,
+        "__repr__": __repr__,
+    }
+    if record:
+        def values(self):
+            return tuple(getattr(self, f) for f in fields)
+
+        def __eq__(self, other):
+            if other.__class__ is not self.__class__:
+                return NotImplemented
+            return values(self) == values(other)
+
+        def __hash__(self):
+            return hash(values(self))
+
+        def __setattr__(self, k, v):
+            raise AttributeError(f"{name} is immutable")
+
+        def __delattr__(self, k):
+            raise AttributeError(f"{name} is immutable")
+
+        def __reduce__(self):
+            return (self.__class__, values(self))
+
+        ns.update(__eq__=__eq__, __hash__=__hash__, __setattr__=__setattr__,
+                  __delattr__=__delattr__, __reduce__=__reduce__)
+    return type(name, (base,), ns)
+|}
+
+let factory : Object.t option Atomic.t = Atomic.make None
+
+(* ------------------------------------------------------------------------ *)
 (* Conversions *)
 (* ------------------------------------------------------------------------ *)
 
@@ -478,9 +576,33 @@ module Conv = struct
 
   type 'a to_py = gil -> 'a -> Object.t
   type 'a of_py = gil -> Object.t -> ('a, error) result
-  type 'a t = { to_py : 'a to_py; of_py : 'a of_py; ty : string option }
 
-  let make ?ty ~to_py ~of_py () = { to_py; of_py; ty }
+  type 'a t = {
+    to_py : 'a to_py;
+    of_py : 'a of_py;
+    ty : string option;
+    classes : record_class list;
+        (* the record classes its values may contain (registered with the
+           export modules that use the converter) *)
+    record : record_class option; (* the class of its own values *)
+  }
+
+  type any = Any : 'a t -> any
+
+  (* Physical equality: a class is one value. *)
+  let union ls =
+    List.fold_left
+      (fun acc l ->
+        List.fold_left
+          (fun acc c -> if List.memq c acc then acc else acc @ [ c ])
+          acc l)
+      [] ls
+
+  let classes_of parts = union (List.map (fun (Any c) -> c.classes) parts)
+
+  let make ?ty ?(parts = []) ~to_py ~of_py () =
+    { to_py; of_py; ty; classes = classes_of parts; record = None }
+
   let to_py c = c.to_py
   let of_py c = c.of_py
   let ty c = c.ty
@@ -493,6 +615,8 @@ module Conv = struct
         (match ty with
         | Some _ -> ty
         | None -> c.ty);
+      classes = c.classes;
+      record = c.record;
     }
 
   let with_path elt (of_a : 'a of_py) : 'a of_py =
@@ -515,6 +639,8 @@ module Conv = struct
   let int =
     {
       ty = Some "int";
+      classes = [];
+      record = None;
       to_py = (fun () i -> make_obj B.of_int i);
       of_py =
         (fun () o ->
@@ -535,6 +661,8 @@ module Conv = struct
   let float =
     {
       ty = Some "float";
+      classes = [];
+      record = None;
       to_py = (fun () f -> make_obj B.of_float f);
       of_py =
         (fun () o ->
@@ -553,6 +681,8 @@ module Conv = struct
   let bool =
     {
       ty = Some "bool";
+      classes = [];
+      record = None;
       to_py = (fun () b -> make_obj B.of_bool b);
       of_py =
         (fun () o ->
@@ -576,6 +706,8 @@ module Conv = struct
   let string =
     {
       ty = Some "str";
+      classes = [];
+      record = None;
       to_py =
         (fun () s ->
           match B.of_string s with
@@ -599,6 +731,8 @@ module Conv = struct
   let bytes =
     {
       ty = Some "bytes";
+      classes = [];
+      record = None;
       to_py = (fun () s -> make_obj B.of_bytes s);
       of_py =
         (fun () o ->
@@ -610,6 +744,8 @@ module Conv = struct
   let json =
     {
       ty = Some "bytes";
+      classes = [];
+      record = None;
       to_py = bytes.to_py;
       of_py =
         (fun () o ->
@@ -622,12 +758,20 @@ module Conv = struct
   let unit =
     {
       ty = Some "None";
+      classes = [];
+      record = None;
       to_py = (fun () () -> Object.none);
       of_py = (fun () o -> if B.is_none o then Ok () else mismatch "None" o);
     }
 
   let object_ =
-    { ty = Some "object"; to_py = (fun () o -> o); of_py = (fun () o -> Ok o) }
+    {
+      ty = Some "object";
+      classes = [];
+      record = None;
+      to_py = (fun () o -> o);
+      of_py = (fun () o -> Ok o);
+    }
 
   (* Convert every item left to right; the first error wins. *)
   let items gil (of_a : 'a of_py) items =
@@ -644,6 +788,8 @@ module Conv = struct
   let list a =
     {
       ty = Some (Printf.sprintf "list[%s]" (ty_of a));
+      classes = a.classes;
+      record = None;
       to_py =
         (fun gil l ->
           make_obj B.list_of_array (Array.of_list (List.map (a.to_py gil) l)));
@@ -659,6 +805,8 @@ module Conv = struct
   let option a =
     {
       ty = Some (ty_of a ^ " | None");
+      classes = a.classes;
+      record = None;
       to_py =
         (fun gil -> function
           | None -> Object.none
@@ -672,6 +820,8 @@ module Conv = struct
   let dict a =
     {
       ty = Some (Printf.sprintf "dict[str, %s]" (ty_of a));
+      classes = a.classes;
+      record = None;
       to_py =
         (fun gil l ->
           let keys = Array.of_list (List.map fst l) in
@@ -731,6 +881,8 @@ module Conv = struct
   let pair a b =
     {
       ty = Some (Printf.sprintf "tuple[%s, %s]" (ty_of a) (ty_of b));
+      classes = union [ a.classes; b.classes ];
+      record = None;
       to_py =
         (fun gil (x, y) ->
           make_obj B.tuple_of_array [| a.to_py gil x; b.to_py gil y |]);
@@ -746,6 +898,8 @@ module Conv = struct
     {
       ty =
         Some (Printf.sprintf "tuple[%s, %s, %s]" (ty_of a) (ty_of b) (ty_of c));
+      classes = union [ a.classes; b.classes; c.classes ];
+      record = None;
       to_py =
         (fun gil (x, y, z) ->
           make_obj B.tuple_of_array
@@ -758,6 +912,166 @@ module Conv = struct
           let* z = prefix (Index 2) (c.of_py gil it.(2)) in
           Ok (x, y, z));
     }
+
+  let tuple4 a b c d =
+    {
+      ty =
+        Some
+          (Printf.sprintf "tuple[%s, %s, %s, %s]" (ty_of a) (ty_of b) (ty_of c)
+             (ty_of d));
+      classes = union [ a.classes; b.classes; c.classes; d.classes ];
+      record = None;
+      to_py =
+        (fun gil (x, y, z, w) ->
+          make_obj B.tuple_of_array
+            [| a.to_py gil x; b.to_py gil y; c.to_py gil z; d.to_py gil w |]);
+      of_py =
+        (fun gil o ->
+          let* it = fixed 4 gil o in
+          let* x = prefix (Index 0) (a.of_py gil it.(0)) in
+          let* y = prefix (Index 1) (b.of_py gil it.(1)) in
+          let* z = prefix (Index 2) (c.of_py gil it.(2)) in
+          let* w = prefix (Index 3) (d.of_py gil it.(3)) in
+          Ok (x, y, z, w));
+    }
+
+  let array a = map Array.of_list Array.to_list (list a)
+
+  (* ---- records ---- *)
+
+  type nonrec record_class = record_class
+
+  let record_class ?(doc = "") ?(exception_ = false) ~name fields =
+    {
+      rc_name = name;
+      rc_doc = doc;
+      rc_fields = fields;
+      rc_exception = exception_;
+      rc_tys = None;
+      rc_module = None;
+      rc_class = None;
+    }
+
+  let get_factory gil =
+    match Atomic.get factory with
+    | Some f -> f
+    | None ->
+        let ns = (dict object_).to_py gil [] in
+        ignore
+          (Object.call gil
+             (Import_.cached gil "builtins" "exec")
+             ~args:[| string.to_py gil factory_source; ns |]
+             ());
+        let f =
+          Object.call_method gil ns "__getitem__"
+            ~args:[| string.to_py gil "make" |]
+            ()
+        in
+        Atomic.set factory (Some f);
+        f
+
+  (* The class, created now if needed (in the hook of its module, or for a
+     conversion that runs before that module was imported). *)
+  let create_class gil rc =
+    match rc.rc_class with
+    | Some c -> c
+    | None ->
+        let base =
+          if rc.rc_exception then Import_.cached gil "_sboa" "OCamlError"
+          else Import_.cached gil "builtins" "object"
+        in
+        let c =
+          Object.call gil (get_factory gil)
+            ~args:
+              [|
+                string.to_py gil (Option.value rc.rc_module ~default:"_sboa");
+                string.to_py gil rc.rc_name;
+                string.to_py gil rc.rc_doc;
+                (list string).to_py gil rc.rc_fields;
+                base;
+              |]
+            ()
+        in
+        rc.rc_class <- Some c;
+        c
+
+  (* Import the module first, so that the class is the one it holds. *)
+  let class_object gil rc =
+    match (rc.rc_class, rc.rc_module) with
+    | Some c, _ -> c
+    | None, Some m ->
+        ignore (Import_.module_ gil m);
+        create_class gil rc
+    | None, None -> create_class gil rc
+
+  let record rc fields ~to_fields ~of_py =
+    let tys = List.map (fun (Any c) -> ty_of c) fields in
+    (match rc.rc_tys with
+    | None -> rc.rc_tys <- Some tys
+    | Some prev ->
+        (* another instantiation of a parameterized type *)
+        rc.rc_tys <-
+          Some
+            (List.map2
+               (fun p t -> if String.equal p t then p else "object")
+               prev tys));
+    {
+      ty = Some rc.rc_name;
+      classes = union [ [ rc ]; classes_of fields ];
+      record = Some rc;
+      to_py =
+        (fun gil x ->
+          Object.call gil (class_object gil rc) ~args:(to_fields gil x) ());
+      of_py;
+    }
+
+  let is_attribute_error (e : Python_error.t) =
+    String.equal e.ty "builtins.AttributeError"
+
+  let attr gil o name (of_a : 'a of_py) =
+    match Object.get_attr gil o name with
+    | v -> prefix (Field name) (of_a gil v)
+    | exception Python_error e when is_attribute_error e ->
+        Error
+          {
+            path = [ Field name ];
+            expected = "an attribute";
+            got = "nothing (missing on " ^ B.type_name o ^ ")";
+          }
+
+  (* ---- variants ---- *)
+
+  let constructor gil tag args =
+    if Array.length args = 0 then string.to_py gil tag
+    else
+      make_obj B.tuple_of_array (Array.append [| string.to_py gil tag |] args)
+
+  let constructor_of_py ~expected () o =
+    match B.kind o with
+    | K_str -> Result.map (fun s -> (s, [||])) (string_of_str o)
+    | K_tuple
+    | K_list -> (
+        let items = B.seq_items o in
+        match items with
+        | [||] -> mismatch expected o
+        | _ -> (
+            match B.kind items.(0) with
+            | K_str ->
+                let* tag = prefix (Index 0) (string_of_str items.(0)) in
+                Ok (tag, Array.sub items 1 (Array.length items - 1))
+            | _ -> mismatch expected o))
+    | _ -> mismatch expected o
+
+  let bad_constructor ~expected tag args =
+    Error
+      {
+        path = [];
+        expected;
+        got =
+          (match Array.length args with
+          | 0 -> Printf.sprintf "%S" tag
+          | n -> Printf.sprintf "%S with %d arguments" tag n);
+      }
 
   let of_py_exn c gil o =
     match c.of_py gil o with
@@ -887,7 +1201,7 @@ module Class = struct
 
   let wrap gil c (v : 'a) =
     if not c.imported then begin
-      ignore (Import.module_ gil c.module_);
+      ignore (Import_.module_ gil c.module_);
       c.imported <- true
     end;
     match B.class_wrap c.index (obj_of_value v) with
@@ -921,7 +1235,7 @@ end
    safe from any domain). *)
 module Counter = struct
   (* [owner] is never read: it only keeps the Python object alive. *)
-  type t = { owner : Object.t; ptr : nativeint } [@@warning "-69"]
+  type t = { owner : Object.t; ptr : nativeint }
 
   let of_py : t Conv.of_py =
    fun () o ->
@@ -934,17 +1248,90 @@ module Counter = struct
     | Ok t -> t
     | Error e -> raise (Conversion_error e)
 
+  let conv : t Conv.t =
+    Conv.make ~ty:"Counter" ~to_py:(fun () t -> B.new_ref t.owner) ~of_py ()
+
   let add t n = B.counter_add t.ptr n
   let incr t = add t 1
   let set t n = B.counter_set t.ptr n
   let get t = B.counter_get t.ptr
 end
 
+(* What [Export.stub] writes, per module, in registration order. *)
+type stub_item =
+  | Stub_function of {
+      name : string;
+      params : string option;
+      ret : string option;
+      doc : string;
+    }
+  | Stub_class of { cls : string; doc : string }
+  | Stub_method of {
+      cls : string;
+      name : string;
+      params : string option;
+      doc : string;
+    }
+
+let stub_items_rev : (string * stub_item) list Atomic.t = Atomic.make []
+
+let add_stub module_ item =
+  Atomic.set stub_items_rev ((module_, item) :: Atomic.get stub_items_rev)
+
+(* (module, class): the record classes each export module holds. *)
+let module_classes_rev : (string * record_class) list Atomic.t = Atomic.make []
+
+let classes_in module_ =
+  List.rev (Atomic.get module_classes_rev)
+  |> List.filter_map (fun (m, rc) ->
+      if String.equal m module_ then Some rc else None)
+
+(* Derived exception classes: the instance to raise for an OCaml exception. *)
+let exn_records_rev : (gil -> exn -> Object.t option) list Atomic.t =
+  Atomic.make []
+
+(* The module's record classes are set on it by a hidden function the C
+   module initializer calls once, with the module, and then deletes. *)
+let init_hook_name = "__sboa_init__"
+
+let add_classes ~module_ classes =
+  let known = classes_in module_ in
+  match List.filter (fun rc -> not (List.memq rc known)) classes with
+  | [] -> ()
+  | fresh ->
+      if List.is_empty known then
+        ignore
+          (add_entry
+             {
+               e_module = module_;
+               e_name = init_hook_name;
+               e_doc = "";
+               e_kind =
+                 Function
+                   (fun gil args _ ->
+                     List.iter
+                       (fun rc ->
+                         Object.set_attr gil args.(0) rc.rc_name
+                           (Conv.create_class gil rc))
+                       (classes_in module_);
+                     Object.none);
+             });
+      List.iter
+        (fun rc ->
+          if Option.is_none rc.rc_module then rc.rc_module <- Some module_;
+          Atomic.set module_classes_rev
+            ((module_, rc) :: Atomic.get module_classes_rev))
+        fresh
+
+let detach_body = detach
+
 module Export = struct
   type fn = entry_fn
 
   let register ~module_ ~name ?(doc = "") ?signature (f : fn) =
     check_registration "Export.register";
+    add_stub module_
+      (Stub_function { name; params = signature; ret = None; doc });
     ignore
       (add_entry
          {
@@ -956,6 +1343,8 @@ module Export = struct
 
   let add_method (c : 'a Class.t) ~name ?(doc = "") ?signature (m : 'a -> fn) =
     check_registration "Export.add_method";
+    add_stub c.module_
+      (Stub_method { cls = c.name; name; params = signature; doc });
     ignore
       (add_entry
          {
@@ -973,6 +1362,7 @@ module Export = struct
       ?(methods : (string * ('a -> fn)) list = [])
       ?(repr : (gil -> 'a -> string) option) () : 'a Class.t =
     check_registration "Export.register_class";
+    add_stub module_ (Stub_class { cls = name; doc });
     let c =
       { Class.index = Atomic.get n_classes; module_; name; imported = false }
     in
@@ -1002,6 +1392,419 @@ module Export = struct
   let register_exn_mapping f =
     check_registration "Export.register_exn_mapping";
     Atomic.set exn_mappings_rev (f :: Atomic.get exn_mappings_rev)
+
+  (* ---- typed exports ---- *)
+
+  type kind = Positional | Keyword | Keyword_opt | No_arg
+
+  type info = {
+    p_name : string;
+    p_kind : kind;
+    p_ty : string;
+    p_classes : record_class list;
+  }
+
+  (* An argument of an [Import.def] call. *)
+  type arg = Pos_arg of Object.t | Kw_arg of string * Object.t | Omitted
+
+  type 'a param = {
+    info : info;
+    get : gil -> int -> Object.t array -> (string * Object.t) list -> 'a;
+        (* Python -> OCaml, for [def] *)
+    put : gil -> 'a -> arg; (* OCaml -> Python, for [Import.def] *)
+  }
+
+  type ('f, 'r) params =
+    | Returning : 'r Conv.t -> ('r, 'r) params
+    | Param : 'a param * ('f, 'r) params -> ('a -> 'f, 'r) params
+
+  let info name kind (c : _ Conv.t) =
+    {
+      p_name = name;
+      p_kind = kind;
+      p_ty = Conv.ty_of c;
+      p_classes = c.Conv.classes;
+    }
+
+  let pos name c =
+    {
+      info = info name Positional c;
+      get = (fun gil i args _ -> Conv.positional gil ~name c.Conv.of_py args i);
+      put = (fun gil x -> Pos_arg (c.Conv.to_py gil x));
+    }
+
+  let kw name c =
+    {
+      info = info name Keyword c;
+      get = (fun gil _ _ kwargs -> Conv.keyword gil ~name c.Conv.of_py kwargs);
+      put = (fun gil x -> Kw_arg (name, c.Conv.to_py gil x));
+    }
+
+  let kw_opt name c =
+    {
+      info = { (info name Keyword_opt c) with p_ty = Conv.ty_of c ^ " | None" };
+      get =
+        (fun gil _ _ kwargs -> Conv.keyword_opt gil ~name c.Conv.of_py kwargs);
+      put =
+        (fun gil -> function
+          | None -> Omitted
+          | Some x -> Kw_arg (name, c.Conv.to_py gil x));
+    }
+
+  let unit =
+    {
+      info = { p_name = ""; p_kind = No_arg; p_ty = ""; p_classes = [] };
+      get = (fun _ _ _ _ -> ());
+      put = (fun _ () -> Omitted);
+    }
+
+  let returning c = Returning c
+  let ( @-> ) p rest = Param (p, rest)
+
+  let rec infos : type f r. (f, r) params -> info list = function
+    | Returning _ -> []
+    | Param (p, rest) -> p.info :: infos rest
+
+  let rec result : type f r. (f, r) params -> r Conv.t = function
+    | Returning c -> c
+    | Param (_, rest) -> result rest
+
+  (* Convert every argument (left to right, the GIL held), giving the
+     application of the OCaml function to them, run later. *)
+  let rec convert : type f r.
+      gil ->
+      (f, r) params ->
+      int ->
+      Object.t array ->
+      (string * Object.t) list ->
+      f ->
+      r =
+   fun gil ps i args kwargs ->
+    match ps with
+    | Returning _ -> Fun.id
+    | Param (p, rest) ->
+        let x = p.get gil i args kwargs in
+        let i =
+          match p.info.p_kind with
+          | Positional -> i + 1
+          | Keyword
+          | Keyword_opt
+          | No_arg ->
+              i
+        in
+        let k = convert gil rest i args kwargs in
+        fun f -> k (f x)
+
+  (* The parameter list: positional-only, then keyword-only. *)
+  let signature ~annotate infos =
+    let p i = if annotate then i.p_name ^ ": " ^ i.p_ty else i.p_name in
+    let positional =
+      List.filter_map
+        (fun i ->
+          match i.p_kind with
+          | Positional -> Some (p i)
+          | _ -> None)
+        infos
+    in
+    let keywords =
+      List.filter_map
+        (fun i ->
+          match i.p_kind with
+          | Keyword -> Some (p i)
+          | Keyword_opt ->
+              Some (if annotate then p i ^ " = None" else p i ^ "=None")
+          | _ -> None)
+        infos
+    in
+    String.concat ", "
+      ((match positional with
+         | [] -> []
+         | l -> l @ [ "/" ])
+      @
+      match keywords with
+      | [] -> []
+      | l -> "*" :: l)
+
+  let def ~module_ ~name ?(doc = "") ?(detach = false) params f =
+    check_registration "Export.def";
+    let ret = result params in
+    let infos = infos params in
+    let names keep =
+      List.filter_map
+        (fun i -> if keep i.p_kind then Some i.p_name else None)
+        infos
+    in
+    let max_positional =
+      List.length
+        (names (function
+          | Positional -> true
+          | _ -> false))
+    in
+    let keywords =
+      names (function
+        | Keyword
+        | Keyword_opt ->
+            true
+        | _ -> false)
+    in
+    add_classes ~module_
+      (Conv.union (ret.Conv.classes :: List.map (fun i -> i.p_classes) infos));
+    add_stub module_
+      (Stub_function
+         {
+           name;
+           params = Some (signature ~annotate:true infos);
+           ret = Some (Conv.ty_of ret);
+           doc;
+         });
+    ignore
+      (add_entry
+         {
+           e_module = module_;
+           e_name = name;
+           e_doc =
+             doc_with_signature ~name ~self:"$module" ~doc
+               (Some (signature ~annotate:false infos));
+           e_kind =
+             Function
+               (fun gil args kwargs ->
+                 Conv.check_arity ~max_positional ~keywords args kwargs;
+                 let call = convert gil params 0 args kwargs in
+                 let r =
+                   if detach then detach_body gil (fun () -> call f) else call f
+                 in
+                 Conv.to_py ret gil r);
+         })
+
+  let register_type ~module_ (c : _ Conv.t) =
+    check_registration "Export.register_type";
+    add_classes ~module_ c.Conv.classes
+
+  let register_exception ~module_ (c : 'a Conv.t) (extract : exn -> 'a option) =
+    check_registration "Export.register_exception";
+    (match c.Conv.record with
+    | Some rc when rc.rc_exception -> ()
+    | _ ->
+        invalid_arg
+          "Sboa.Export.register_exception: not the converter of an exception \
+           record ([@@sboa.exception])");
+    add_classes ~module_ c.Conv.classes;
+    Atomic.set exn_records_rev
+      ((fun gil e -> Option.map (Conv.to_py c gil) (extract e))
+      :: Atomic.get exn_records_rev)
+
+  (* ---- stubs ---- *)
+
+  (* [s] without the qualification [prefix] ("mod.") anywhere. *)
+  let unqualify prefix s =
+    let n = String.length prefix in
+    let b = Buffer.create (String.length s) in
+    let rec go i =
+      if i >= String.length s then ()
+      else if
+        i + n <= String.length s
+        && String.equal (String.sub s i n) prefix
+        && (i = 0
+           ||
+           match s.[i - 1] with
+           | 'a' .. 'z'
+           | 'A' .. 'Z'
+           | '0' .. '9'
+           | '_'
+           | '.' ->
+               false
+           | _ -> true)
+      then go (i + n)
+      else begin
+        Buffer.add_char b s.[i];
+        go (i + 1)
+      end
+    in
+    go 0;
+    Buffer.contents b
+
+  let contains s sub =
+    let n = String.length sub in
+    let rec go i =
+      i + n <= String.length s
+      && (String.equal (String.sub s i n) sub || go (i + 1))
+    in
+    go 0
+
+  let docstring indent doc =
+    if String.equal doc "" then ""
+    else
+      let doc = String.split_on_char '\\' doc |> String.concat "\\\\" in
+      (* no triple quote inside, no quote just before the closing one *)
+      let doc =
+        if contains doc "\"\"\"" || String.ends_with ~suffix:"\"" doc then
+          String.split_on_char '"' doc |> String.concat "\\\""
+        else doc
+      in
+      let lines = String.split_on_char '\n' doc in
+      Printf.sprintf "%s\"\"\"%s\"\"\"\n" indent
+        (String.concat ("\n" ^ indent) lines)
+
+  let stub module_ =
+    let items =
+      List.rev (Atomic.get stub_items_rev)
+      |> List.filter_map (fun (m, it) ->
+          if String.equal m module_ then Some it else None)
+    in
+    let records = classes_in module_ in
+    let ty = unqualify (module_ ^ ".") in
+    let b = Buffer.create 1024 in
+    let add fmt = Printf.bprintf b fmt in
+    let taken name =
+      List.exists (fun rc -> String.equal rc.rc_name name) records
+      || List.exists
+           (function
+             | Stub_class { cls; _ } -> String.equal cls name
+             | Stub_function { name = n; _ } -> String.equal n name
+             | Stub_method _ -> false)
+           items
+    in
+    add "# The builtin module %s (generated by Sboa.Export.stub).\n" module_;
+    let types =
+      List.concat_map (fun rc -> Option.value rc.rc_tys ~default:[]) records
+      @ List.concat_map
+          (function
+            | Stub_function { params; ret; _ } ->
+                Option.to_list params @ Option.to_list ret
+            | Stub_class _
+            | Stub_method _ ->
+                [])
+          items
+    in
+    if List.exists (fun t -> contains t "Literal[") types then
+      add "\nfrom typing import Literal\n";
+    if not (taken "OCamlError") then
+      add
+        "\n\
+         class OCamlError(Exception):\n\
+        \    \"\"\"An OCaml exception that crossed into Python.\"\"\"\n";
+    if not (taken "Counter") then
+      add
+        "\n\
+         class Counter:\n\
+        \    \"\"\"A 64-bit atomic counter that OCaml updates.\"\"\"\n\
+        \    def __init__(self) -> None: ...\n\
+        \    @property\n\
+        \    def value(self) -> int: ...\n";
+    List.iter
+      (fun rc ->
+        let tys =
+          match rc.rc_tys with
+          | Some l -> List.map ty l
+          | None -> List.map (fun _ -> "object") rc.rc_fields
+        in
+        let fields = List.combine rc.rc_fields tys in
+        add "\nclass %s%s:\n" rc.rc_name
+          (if rc.rc_exception then "(OCamlError)" else "");
+        Buffer.add_string b (docstring "    " rc.rc_doc);
+        List.iter (fun (f, t) -> add "    %s: %s\n" f t) fields;
+        add "    def __init__(self, %s) -> None: ...\n"
+          (String.concat ", " (List.map (fun (f, t) -> f ^ ": " ^ t) fields)))
+      records;
+    let methods cls =
+      List.filter_map
+        (function
+          | Stub_method m when String.equal m.cls cls -> Some (m.name, m.params)
+          | _ -> None)
+        items
+    in
+    let params = function
+      | None -> "*args, **kwargs"
+      | Some p -> p
+    in
+    List.iter
+      (function
+        | Stub_class { cls; doc } -> (
+            add "\nclass %s:\n" cls;
+            Buffer.add_string b (docstring "    " doc);
+            match methods cls with
+            | [] -> if String.equal doc "" then add "    ...\n"
+            | ms ->
+                List.iter
+                  (fun (name, p) ->
+                    let p = params p in
+                    add "    def %s(self%s): ...\n" name
+                      (if String.equal p "" then "" else ", " ^ p))
+                  ms)
+        | Stub_function { name; params = p; ret; doc } -> (
+            add "\ndef %s(%s)%s:" name
+              (ty (params p))
+              (match ret with
+              | None -> ""
+              | Some r -> " -> " ^ ty r);
+            match docstring "    " doc with
+            | "" -> add " ...\n"
+            | d -> add "\n%s" d)
+        | Stub_method _ -> ())
+      items;
+    Buffer.contents b
+end
+
+(* Import, extended with typed calls into Python (it needs Export's
+   parameter lists, hence here). *)
+module Import = struct
+  include Import_
+
+  type 'a param = 'a Export.param
+  type ('f, 'r) params = ('f, 'r) Export.params
+
+  let pos = Export.pos
+  let kw = Export.kw
+  let kw_opt = Export.kw_opt
+  let unit = Export.unit
+  let returning = Export.returning
+  let ( @-> ) = Export.( @-> )
+
+  (* The OCaml function: collect the arguments (unconverted: converting
+     needs the GIL), and at the last one take the GIL, convert, call. *)
+  let rec build : type f r.
+      (f, r) Export.params ->
+      (gil -> Export.arg) list ->
+      (r Conv.t -> (gil -> Export.arg) list -> r) ->
+      f =
+   fun ps acc call ->
+    match ps with
+    | Returning c -> call c acc
+    | Param (p, rest) ->
+        fun x -> build rest ((fun gil -> p.put gil x) :: acc) call
+
+  let def (type f r) ~module_ ~name (params : (f, r) params) : f =
+    let call (ret : r Conv.t) acc =
+      with_gil (fun gil ->
+          let args = List.rev_map (fun put -> put gil) acc in
+          let f = cached gil module_ name in
+          let r =
+            Object.call gil f
+              ~args:
+                (Array.of_list
+                   (List.filter_map
+                      (function
+                        | Export.Pos_arg o -> Some o
+                        | Kw_arg _
+                        | Omitted ->
+                            None)
+                      args))
+              ~kwargs:
+                (List.filter_map
+                   (function
+                     | Export.Kw_arg (k, o) -> Some (k, o)
+                     | Pos_arg _
+                     | Omitted ->
+                         None)
+                   args)
+              ()
+          in
+          Conv.result_of gil ret r)
+    in
+    match params with
+    | Returning _ ->
+        invalid_arg "Sboa.Import.def: no parameter (write unit @-> returning c)"
+    | Param _ -> build params [] call
 end
 
 (* Python class from a dotted name ("pkg.mod.Class"). *)
@@ -1033,7 +1836,37 @@ let find_mapping gil e =
       | exception Sys.Break -> raise Mapping_interrupted
       | exception _ -> None)
 
-(* OCaml exception escaping an export -> Python error indicator. *)
+(* The instance of the first derived exception class that applies. *)
+let find_exn_record gil e =
+  List.rev (Atomic.get exn_records_rev)
+  |> List.find_map (fun f ->
+      match f gil e with
+      | r -> r
+      | exception _ -> None)
+
+(* An exception no built-in case covers: a registered mapping, else the
+   fallbacks. *)
+let set_mapped_error gil e bt =
+  let mapped =
+    match find_mapping gil e with
+    | None -> None
+    | Some (cls, args) -> (
+        match class_of_dotted gil cls with
+        | c -> Some (c, args)
+        | exception _ -> None)
+    | exception Mapping_interrupted ->
+        Some (class_of_dotted gil "KeyboardInterrupt", [||])
+  in
+  match (mapped, e) with
+  | Some (c, args), _ -> B.set_error_class c (B.tuple_of_array args)
+  | None, Out_of_memory -> B.set_error_builtin "MemoryError" ""
+  | None, Stack_overflow ->
+      B.set_error_builtin "RecursionError" "OCaml stack overflow"
+  | None, _ -> set_error_ocaml e bt
+
+(* OCaml exception escaping an export -> Python error indicator. Derived
+   exception classes come first and, like the _sboa.OCamlError fallback,
+   resurrect the OCaml exception if they cross back. *)
 let set_python_error gil e bt =
   match e with
   | Python_error pe -> B.set_error_obj pe.exn
@@ -1042,22 +1875,9 @@ let set_python_error gil e bt =
       B.set_error_builtin "TypeError" (conv_error_to_string ce)
   | Sys.Break -> B.set_error_builtin "KeyboardInterrupt" ""
   | _ -> (
-      let mapped =
-        match find_mapping gil e with
-        | None -> None
-        | Some (cls, args) -> (
-            match class_of_dotted gil cls with
-            | c -> Some (c, args)
-            | exception _ -> None)
-        | exception Mapping_interrupted ->
-            Some (class_of_dotted gil "KeyboardInterrupt", [||])
-      in
-      match (mapped, e) with
-      | Some (c, args), _ -> B.set_error_class c (B.tuple_of_array args)
-      | None, Out_of_memory -> B.set_error_builtin "MemoryError" ""
-      | None, Stack_overflow ->
-          B.set_error_builtin "RecursionError" "OCaml stack overflow"
-      | None, _ -> set_error_ocaml e bt)
+      match find_exn_record gil e with
+      | Some o -> B.set_error_ocaml_obj o (e, bt)
+      | None -> set_mapped_error gil e bt)
 
 let unwrap_self cls qualified args =
   if Array.length args = 0 then

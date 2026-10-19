@@ -2,6 +2,22 @@
 
 ## unreleased
 
+- `sboa-bundle flags` and `exec` default to the installed `sboa.config`
+  (next to the script) when given no `--config`, as the README says.
+
+- `sboa.ppx`: `[@@deriving sboa]` derives `Sboa.Conv` converters (scalars,
+  options, lists, arrays, tuples, records, variants, type parameters);
+  records become Python classes with attributes, a `repr`, equality and
+  hash, `[@@sboa.exception]` records exception classes (subclasses of
+  `OCamlError`, `Export.register_exception`). Typed exports
+  (`Export.def` with `pos`/`kw`/`kw_opt`/`unit`/`returning`) derive arity
+  checks, conversions and the text signature from the parameter list;
+  `Export.stub` writes a module's `.pyi`. New in `Conv`: `tuple4`, `array`,
+  `record_class`/`record`/`attr`, the variant helpers, `make ?parts`;
+  `Counter.conv`. `Import.def` is the reverse of `Export.def`: a Python
+  function as a typed OCaml function (same parameter combinators). The
+  README has a worked example (`test/ppx/`).
+
 - sboa builds curl-style: `sboa-bundle discover` (the installed launcher of
   the tool, in OCaml) finds the CPython 3.13 (`SBOA_PYTHON`, `SBOA_PREFIX`,
   `python3.13` on `PATH`, `uv python find 3.13`, `python3` if it is 3.13)

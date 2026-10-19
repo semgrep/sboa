@@ -628,8 +628,27 @@ static void exn_capsule_destructor(PyObject *cap) {
   else PyErr_Clear();
 }
 
-/* Raise _sboa.OCamlError(msg) whose .ocaml_exn capsule roots the OCaml
-   (exn, raw_backtrace) pair, so crossing back resurrects it. */
+/* Set exception e (a reference this steals) as raised, with an .ocaml_exn
+   capsule rooting the OCaml (exn, raw_backtrace) pair, so crossing back
+   resurrects it. */
+static void raise_resurrectable(PyObject *e, value v_pair) {
+  value *root = sboa_new_root(v_pair);
+  PyObject *cap = PyCapsule_New(root, SBOA_EXN_CAPSULE, exn_capsule_destructor);
+  if (cap == NULL) {
+    sboa_release_root(root);
+    Py_DECREF(e);
+    return;
+  }
+  int rc = PyObject_SetAttrString(e, "ocaml_exn", cap);
+  Py_DECREF(cap);
+  if (rc != 0) {
+    Py_DECREF(e);
+    return;
+  }
+  PyErr_SetRaisedException(e);
+}
+
+/* Raise _sboa.OCamlError(msg), resurrectable. */
 value sboa_set_error_ocaml(value v_msg, value v_pair) {
   CAMLparam2(v_msg, v_pair);
   sboa_check_gil();
@@ -638,20 +657,15 @@ value sboa_set_error_ocaml(value v_msg, value v_pair) {
   PyObject *e = m ? PyObject_CallOneArg(sboa_ocaml_error_type, m) : NULL;
   Py_XDECREF(m);
   if (e == NULL) CAMLreturn(Val_unit); /* some exception is set */
-  value *root = sboa_new_root(v_pair);
-  PyObject *cap = PyCapsule_New(root, SBOA_EXN_CAPSULE, exn_capsule_destructor);
-  if (cap == NULL) {
-    sboa_release_root(root);
-    Py_DECREF(e);
-    CAMLreturn(Val_unit);
-  }
-  int rc = PyObject_SetAttrString(e, "ocaml_exn", cap);
-  Py_DECREF(cap);
-  if (rc != 0) {
-    Py_DECREF(e);
-    CAMLreturn(Val_unit);
-  }
-  PyErr_SetRaisedException(e);
+  raise_resurrectable(e, v_pair);
+  CAMLreturn(Val_unit);
+}
+
+/* Raise the instance v_exc (of an OCamlError subclass), resurrectable. */
+value sboa_set_error_ocaml_obj(value v_exc, value v_pair) {
+  CAMLparam2(v_exc, v_pair);
+  sboa_check_gil();
+  raise_resurrectable(Py_NewRef(sboa_obj(v_exc)), v_pair);
   CAMLreturn(Val_unit);
 }
 

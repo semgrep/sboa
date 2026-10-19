@@ -180,9 +180,22 @@ module Conv : sig
   type 'a t
   (** A two-way converter between ['a] and a Python type. *)
 
-  val make : ?ty:string -> to_py:'a to_py -> of_py:'a of_py -> unit -> 'a t
+  type any =
+    | Any : 'a t -> any
+        (** A converter of any type, where only its metadata matters: its type
+      description and the record classes its values contain. *)
+
+  val make :
+    ?ty:string ->
+    ?parts:any list ->
+    to_py:'a to_py ->
+    of_py:'a of_py ->
+    unit ->
+    'a t
   (** [ty] describes the Python type for messages and stubs, e.g.
-      ["list[str]"]. *)
+      ["list[str]"]. [parts] are the converters it delegates to: an export
+      using the result registers their {{!record}record classes} in its
+      module. *)
 
   val to_py : 'a t -> 'a to_py
   val of_py : 'a t -> 'a of_py
@@ -237,6 +250,69 @@ module Conv : sig
 
   val tuple3 : 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
   (** A 3-tuple, like {!pair}. *)
+
+  val tuple4 : 'a t -> 'b t -> 'c t -> 'd t -> ('a * 'b * 'c * 'd) t
+  (** A 4-tuple, like {!pair}. *)
+
+  val array : 'a t -> 'a array t
+  (** Like {!list}. *)
+
+  (** {2 Records and variants}
+      What [[@@deriving sboa]] (the [sboa.ppx] deriver, see the README)
+      generates code against; usable by hand as well. *)
+
+  type record_class
+  (** A Python class for an OCaml record type: attributes named after the
+      fields, a constructor taking them positionally or by keyword, a
+      [repr] like [ScanResult(output='', exit_code=0)], [__match_args__].
+      Plain records are frozen, compare and hash by value and pickle;
+      exception records subclass [_sboa.OCamlError] (see
+      {!Export.register_exception}). The class is created once, the first
+      time a module that holds it is imported (its [__module__] is the first
+      export module it was registered in) or at the first conversion. *)
+
+  val record_class :
+    ?doc:string ->
+    ?exception_:bool ->
+    name:string ->
+    string list ->
+    record_class
+  (** [record_class ~name fields]: [doc] becomes the class docstring. *)
+
+  val record :
+    record_class ->
+    any list ->
+    to_fields:(gil -> 'a -> Object.t array) ->
+    of_py:'a of_py ->
+    'a t
+  (** [record cls field_convs ~to_fields ~of_py]: [to_py] calls the class
+      with [to_fields] (the converted fields in order); [field_convs] (in
+      field order) give the field types for stubs and the record classes
+      nested in the fields. [of_py] is typically a sequence of {!attr}, and
+      so accepts any object with the attributes. *)
+
+  val attr : gil -> Object.t -> string -> 'a of_py -> ('a, error) result
+  (** [attr gil o name of_a] converts [o.name]; errors have a [Field name]
+      path (a missing attribute: ["expected an attribute"]). *)
+
+  val constructor : gil -> string -> Object.t array -> Object.t
+  (** The variant encoding: a constructor without arguments is its name
+      ([str]); one with arguments is a tuple of its name and the converted
+      arguments, e.g. [("Circle", 1.5)]. *)
+
+  val constructor_of_py :
+    expected:string ->
+    gil ->
+    Object.t ->
+    (string * Object.t array, error) result
+  (** The name and the argument objects of an encoded constructor ([str], or
+      [tuple]/[list] starting with a [str]); [expected] is the message for
+      anything else. *)
+
+  val bad_constructor :
+    expected:string -> string -> Object.t array -> ('a, error) result
+  (** The error for an unknown constructor name or a wrong number of
+      arguments. *)
 
   val func0 : 'r t -> (unit -> 'r) of_py
   (** A Python callable as an OCaml closure. Calling the closure re-takes the
@@ -341,6 +417,9 @@ module Counter : sig
   (** Of exactly a [_sboa.Counter] instance (no subclass exists: the type
       is final). *)
 
+  val conv : t Conv.t
+  (** {!of_py}, and the counter's object back (typed ["Counter"]). *)
+
   val of_object : gil -> Object.t -> t
   (** {!of_py}, raising {!Conversion_error} on another type. *)
 
@@ -400,6 +479,77 @@ module Export : sig
     unit
   (** Add a method to a registered class. [signature] excludes [self]. *)
 
+  (** {2 Typed exports}
+      [def] registers an OCaml function with typed parameters: arity
+      checks, conversions, the text signature and the stub come from the
+      parameter list. For example
+      [def ~module_:"m" ~name:"f" (pos "xs" Conv.(list int) @-> kw_opt "scale" Conv.int @-> returning Conv.int) f]
+      registers [m.f(xs, /, *, scale=None)] with
+      [f : int list -> int option -> int]. *)
+
+  type 'a param
+  (** One parameter, giving the function an argument of type ['a]. *)
+
+  type ('f, 'r) params
+  (** A parameter list for a function of type ['f] returning ['r]. *)
+
+  val pos : string -> 'a Conv.t -> 'a param
+  (** A positional-only parameter. *)
+
+  val kw : string -> 'a Conv.t -> 'a param
+  (** A required keyword-only parameter. *)
+
+  val kw_opt : string -> 'a Conv.t -> 'a option param
+  (** An optional keyword-only parameter: absent or [None] is [None]. *)
+
+  val unit : unit param
+  (** No parameter: [unit @-> returning c] for a function of no argument. *)
+
+  val returning : 'r Conv.t -> ('r, 'r) params
+  (** The result. *)
+
+  val ( @-> ) : 'a param -> ('f, 'r) params -> ('a -> 'f, 'r) params
+  (** Add a parameter in front. *)
+
+  val def :
+    module_:string ->
+    name:string ->
+    ?doc:string ->
+    ?detach:bool ->
+    ('f, 'r) params ->
+    'f ->
+    unit
+  (** Register [module_.name] (as {!register} does) with the signature
+      [positional, /, *, keywords] (positional parameters first, whatever
+      their order in the list). The arguments are converted with the GIL
+      held; with [~detach:true] the function runs with the GIL released
+      ({!Sboa.detach}; it may still take it with {!Sboa.with_gil}). The
+      record classes of the parameters and the result are registered in
+      [module_]. *)
+
+  val register_type : module_:string -> 'a Conv.t -> unit
+  (** Register the record classes of a converter in [module_] (where no
+      export mentions them, e.g. for [isinstance] checks). *)
+
+  val register_exception :
+    module_:string -> 'a Conv.t -> (exn -> 'a option) -> unit
+  (** [register_exception ~module_ conv extract]: an OCaml exception for
+      which [extract] gives a payload escapes an export as the payload's
+      class (from an exception record: [[@@sboa.exception]], or
+      [Conv.record_class ~exception_:true]), a subclass of [OCamlError]
+      registered in [module_]. Like [OCamlError], it re-raises the original
+      OCaml exception if it crosses back into OCaml. Consulted before the
+      mappings of {!register_exn_mapping}. Raises [Invalid_argument] if
+      [conv] is not the converter of an exception record. *)
+
+  val stub : string -> string
+  (** The text of a [.pyi] stub for an export module: [OCamlError],
+      [Counter], its record and exception classes, the classes of
+      {!register_class} with their methods, the functions (annotated for
+      {!def}, with the text signature otherwise), with their docs. Call it
+      after the registrations (e.g. from a dune rule running a program that
+      prints it). *)
+
   val register_exn_mapping :
     (gil -> exn -> (string * Object.t array) option) -> unit
   (** Map an OCaml exception escaping an export to a Python exception class
@@ -421,6 +571,52 @@ module Import : sig
   val cached : gil -> string -> string -> Object.t
   (** [cached gil m a] is [m.a], resolved on first use and kept for the
       lifetime of the process. *)
+
+  (** {2 Typed calls}
+      The mirror of {!Export.def}: [def] turns a Python function into an
+      OCaml one, with the same parameter combinators (re-exported here) and
+      converters. For example
+      [def ~module_:"semgrep.main" ~name:"embedded_main" (pos "argv" Conv.(list string) @-> returning Conv.int)]
+      is a [string list -> int]. *)
+
+  type 'a param = 'a Export.param
+  type ('f, 'r) params = ('f, 'r) Export.params
+
+  val pos : string -> 'a Conv.t -> 'a param
+  (** A positional argument. *)
+
+  val kw : string -> 'a Conv.t -> 'a param
+  (** A keyword argument. *)
+
+  val kw_opt : string -> 'a Conv.t -> 'a option param
+  (** A keyword argument passed only when [Some] (the Python default
+      applies to [None]). *)
+
+  val unit : unit param
+  (** No argument: [unit @-> returning c] for a Python function called with
+      none. *)
+
+  val returning : 'r Conv.t -> ('r, 'r) params
+  (** The result. *)
+
+  val ( @-> ) : 'a param -> ('f, 'r) params -> ('a -> 'f, 'r) params
+  (** Add a parameter in front. *)
+
+  val def : module_:string -> name:string -> ('f, 'r) params -> 'f
+  (** [def ~module_ ~name params] is an OCaml function that calls
+      [module_.name]: once it has all its arguments it takes the GIL with
+      {!with_gil} (re-entrant, so it works inside an export, a [with_gil]
+      scope or a detached export body; and like [with_gil], only on the
+      thread that initialized Python), resolves the callable with {!cached}
+      (imported on the first call, then kept), converts the arguments
+      (positional ones in order, keyword ones by name), calls, and converts
+      the result (a record from any object with the attributes, e.g. a
+      dataclass or a [SimpleNamespace]). A Python exception raises
+      {!Python_error}; an [OCamlError] carrying an OCaml exception re-raises
+      that exception; a result of the wrong shape raises
+      {!Conversion_error} (path ["argument '<return>'"]). [def] itself does
+      nothing else (any time, any thread); [Invalid_argument] for a list
+      without parameter. *)
 end
 
 (** Python bytecode bundles embedded in the executable. *)

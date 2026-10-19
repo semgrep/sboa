@@ -141,6 +141,9 @@ external set_error_system_exit : int -> unit = "sboa_set_error_system_exit"
 external set_error_ocaml : string -> exn * Printexc.raw_backtrace -> unit
   = "sboa_set_error_ocaml"
 
+external set_error_ocaml_obj : obj -> exn * Printexc.raw_backtrace -> unit
+  = "sboa_set_error_ocaml_obj"
+
 external frame_args : unit -> obj array = "sboa_frame_args"
 external frame_kwnames : unit -> string array = "sboa_frame_kwnames"
 external class_wrap : int -> Obj.t -> obj = "sboa_class_wrap"
