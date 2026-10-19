@@ -220,14 +220,15 @@ a control character are refused. Readers must ignore unknown fields.
 Dune rules run the tool as `%{bin:sboa-bundle}`. Every subcommand but
 `discover` runs `sboa_bundle.py` under the `python_exe` of `--config C`
 (bytecode is only valid for the interpreter that compiled it), or, without
-`--config`, of the installed `sboa.config`: a build needs no other Python.
+`--config`, of the installed `sboa.config` (which `flags` and `exec` then
+read too): a build needs no other Python.
 
 | Subcommand | |
 |---|---|
 | `discover [--out F] [--cflags F] [--link F] [--clibs F]` | find a CPython 3.13 as above and write its config (and flag files) |
 | `describe --prefix P --out F` | write the config of the installation at P (`--python EXE` for a given interpreter) |
-| `flags --config C --cflags\|--link\|--clibs` | print a dune `(:include)` sexp: `-I` of the headers; libpython by full path and the rpaths for an executable's `link_flags` (`-cclib`/`-ccopt`); the `sboa` library's `c_library_flags` (empty except the import library on Windows) |
-| `exec --config C -- ARGS...` | run C's interpreter |
+| `flags [--config C] --cflags\|--link\|--clibs` | print a dune `(:include)` sexp: `-I` of the headers; libpython by full path and the rpaths for an executable's `link_flags` (`-cclib`/`-ccopt`); the `sboa` library's `c_library_flags` (empty except the import library on Windows) |
+| `exec [--config C] -- ARGS...` | run C's interpreter |
 | `freeze`, `stdlib`, `bundle`, `embed`, `runtime-files`, `check-seam`, `fetch-wheels` | the recipe below; `sboa-bundle --help` and `sboa-bundle CMD --help` |
 
 ### The config

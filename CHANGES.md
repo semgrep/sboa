@@ -2,6 +2,9 @@
 
 ## unreleased
 
+- `sboa-bundle flags` and `exec` default to the installed `sboa.config`
+  (next to the script) when given no `--config`, as the README says.
+
 - `sboa.ppx`: `[@@deriving sboa]` derives `Sboa.Conv` converters (scalars,
   options, lists, arrays, tuples, records, variants, type parameters);
   records become Python classes with attributes, a `repr`, equality and

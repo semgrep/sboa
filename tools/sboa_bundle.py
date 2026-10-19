@@ -2083,10 +2083,22 @@ def cmd_describe(args: argparse.Namespace) -> int:
     return 0
 
 
+def installed_config() -> Path:
+    """The ``sboa.config`` next to this script: the installed one
+    (``lib/sboa/``), or the one sboa's build writes next to the script in a
+    dune workspace."""
+    return Path(os.path.realpath(__file__)).parent / "sboa.config"
+
+
 def need_config(args: argparse.Namespace, cmd: str) -> Dict[str, "Sexp"]:
-    if args.config is None:
-        raise UsageError(f"{cmd} needs --config")
-    return read_sboa_config(args.config)
+    """``--config``, else the installed config (what the launcher runs the
+    script under)."""
+    if args.config is not None:
+        return read_sboa_config(args.config)
+    default = installed_config()
+    if not default.is_file():
+        raise UsageError(f"{cmd} needs --config (there is no {default})")
+    return read_sboa_config(default)
 
 
 def dune_sexp(items: Sequence[str]) -> str:
@@ -2375,7 +2387,9 @@ def build_parser() -> argparse.ArgumentParser:
     d.set_defaults(func=cmd_describe)
 
     fl = sub.add_parser(
-        "flags", help="print C or link flags of --config as a dune (:include) sexp"
+        "flags",
+        help="print C or link flags of --config (default: the installed"
+        " sboa.config) as a dune (:include) sexp",
     )
     config_arg(fl)
     what = fl.add_mutually_exclusive_group(required=True)
@@ -2406,7 +2420,9 @@ def build_parser() -> argparse.ArgumentParser:
     fl.set_defaults(func=cmd_flags)
 
     x = sub.add_parser(
-        "exec", help="run the interpreter of --config: exec --config C -- ARGS..."
+        "exec",
+        help="run the interpreter of --config (default: the installed"
+        " sboa.config): exec [--config C] -- ARGS...",
     )
     config_arg(x)
     x.add_argument("args", nargs=argparse.REMAINDER)
