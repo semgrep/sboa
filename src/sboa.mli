@@ -571,6 +571,52 @@ module Import : sig
   val cached : gil -> string -> string -> Object.t
   (** [cached gil m a] is [m.a], resolved on first use and kept for the
       lifetime of the process. *)
+
+  (** {2 Typed calls}
+      The mirror of {!Export.def}: [def] turns a Python function into an
+      OCaml one, with the same parameter combinators (re-exported here) and
+      converters. For example
+      [def ~module_:"semgrep.main" ~name:"embedded_main" (pos "argv" Conv.(list string) @-> returning Conv.int)]
+      is a [string list -> int]. *)
+
+  type 'a param = 'a Export.param
+  type ('f, 'r) params = ('f, 'r) Export.params
+
+  val pos : string -> 'a Conv.t -> 'a param
+  (** A positional argument. *)
+
+  val kw : string -> 'a Conv.t -> 'a param
+  (** A keyword argument. *)
+
+  val kw_opt : string -> 'a Conv.t -> 'a option param
+  (** A keyword argument passed only when [Some] (the Python default
+      applies to [None]). *)
+
+  val unit : unit param
+  (** No argument: [unit @-> returning c] for a Python function called with
+      none. *)
+
+  val returning : 'r Conv.t -> ('r, 'r) params
+  (** The result. *)
+
+  val ( @-> ) : 'a param -> ('f, 'r) params -> ('a -> 'f, 'r) params
+  (** Add a parameter in front. *)
+
+  val def : module_:string -> name:string -> ('f, 'r) params -> 'f
+  (** [def ~module_ ~name params] is an OCaml function that calls
+      [module_.name]: once it has all its arguments it takes the GIL with
+      {!with_gil} (re-entrant, so it works inside an export, a [with_gil]
+      scope or a detached export body; and like [with_gil], only on the
+      thread that initialized Python), resolves the callable with {!cached}
+      (imported on the first call, then kept), converts the arguments
+      (positional ones in order, keyword ones by name), calls, and converts
+      the result (a record from any object with the attributes, e.g. a
+      dataclass or a [SimpleNamespace]). A Python exception raises
+      {!Python_error}; an [OCamlError] carrying an OCaml exception re-raises
+      that exception; a result of the wrong shape raises
+      {!Conversion_error} (path ["argument '<return>'"]). [def] itself does
+      nothing else (any time, any thread); [Invalid_argument] for a list
+      without parameter. *)
 end
 
 (** Python bytecode bundles embedded in the executable. *)

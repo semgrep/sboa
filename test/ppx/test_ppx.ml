@@ -51,6 +51,38 @@ let () =
     | Failed f -> Some f
     | _ -> None)
 
+(* Python functions called from OCaml (module _pyside, made by
+   test_import_def). *)
+let greet =
+  Import.(
+    def ~module_:"_pyside" ~name:"greet"
+      (pos "name" Conv.string @-> kw "punct" Conv.string
+     @-> kw_opt "times" Conv.int @-> returning Conv.string))
+
+let point_ns =
+  Import.(
+    def ~module_:"_pyside" ~name:"point_ns"
+      (pos "x" Conv.int @-> returning Point.conv))
+
+let point_dc =
+  Import.(
+    def ~module_:"_pyside" ~name:"point_dc"
+      (unit @-> returning (Conv.list Point.conv)))
+
+let raise_value_error =
+  Import.(
+    def ~module_:"_pyside" ~name:"raise_value_error"
+      (unit @-> returning Conv.unit))
+
+let call_fail =
+  Import.(
+    def ~module_:"_pyside" ~name:"call_fail"
+      (pos "reason" Conv.string @-> returning Conv.unit))
+
+let wrong_result =
+  Import.(
+    def ~module_:"_pyside" ~name:"wrong_result" (unit @-> returning Conv.int))
+
 let stdlib = Sys.getenv "SBOA_STDLIB"
 let read path = In_channel.with_open_bin path In_channel.input_all
 
@@ -272,6 +304,66 @@ let test_stub () =
       \    def get(self, *args, **kwargs): ...\n";
     ]
 
+let test_import_def () =
+  check_py "_pyside"
+    {|
+import sys, types
+m = types.ModuleType("_pyside")
+exec("""
+import dataclasses, types, _shapes
+def greet(name, *, punct, times=1):
+    return ("hi " + name + punct) * times
+def point_ns(x):
+    return types.SimpleNamespace(x=x, y=x + 1)
+@dataclasses.dataclass
+class P:
+    x: int
+    y: int
+def point_dc():
+    return [P(1, 2), _shapes.Point(3, 4)]
+def raise_value_error():
+    raise ValueError("bad value")
+def call_fail(reason):
+    _shapes.fail(reason)
+def wrong_result():
+    return "not an int"
+""", m.__dict__)
+sys.modules["_pyside"] = m
+|};
+  Alcotest.(check string) "positional and keyword" "hi a!" (greet "a" "!" None);
+  Alcotest.(check string)
+    "optional keyword" "hi b.hi b." (greet "b" "." (Some 2));
+  Alcotest.(check bool)
+    "record from SimpleNamespace" true
+    (point_ns 5 = { Point.x = 5; y = 6 });
+  Alcotest.(check bool)
+    "records from a dataclass and the class" true
+    (point_dc () = [ { Point.x = 1; y = 2 }; { x = 3; y = 4 } ]);
+  (match raise_value_error () with
+  | () -> Alcotest.fail "no exception"
+  | exception Python_error e ->
+      Alcotest.(check (pair string string))
+        "Python exception"
+        ("builtins.ValueError", "bad value")
+        (e.ty, e.msg));
+  (match call_fail "deep" with
+  | () -> Alcotest.fail "no exception"
+  | exception Failed { reason; code } ->
+      Alcotest.(check (pair string int))
+        "OCaml exception re-raised" ("deep", 3) (reason, code));
+  (match wrong_result () with
+  | _ -> Alcotest.fail "no exception"
+  | exception Conversion_error e ->
+      Alcotest.(check string)
+        "wrong result" "argument '<return>': expected int, got str"
+        (Conv.error_to_string e));
+  (* inside a with_gil scope: the GIL is re-entrant *)
+  with_gil (fun _ ->
+      Alcotest.(check string) "nested" "hi c?" (greet "c" "?" None));
+  match Import.(def ~module_:"m" ~name:"f" (returning Conv.int)) with
+  | _ -> Alcotest.fail "accepted no parameter"
+  | exception Invalid_argument _ -> ()
+
 let test_register_exception_checks () =
   match Export.register_exception ~module_:m Point.conv (fun _ -> None) with
   | () -> Alcotest.fail "accepted a plain record"
@@ -317,6 +409,7 @@ let () =
           tc "errors" test_errors;
           tc "typed exports" test_exports;
           tc "stub" test_stub;
+          tc "Import.def" test_import_def;
           tc "register_exception checks" test_register_exception_checks;
           tc "demo" test_demo;
           tc "readme" test_readme;

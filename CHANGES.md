@@ -14,7 +14,9 @@
   checks, conversions and the text signature from the parameter list;
   `Export.stub` writes a module's `.pyi`. New in `Conv`: `tuple4`, `array`,
   `record_class`/`record`/`attr`, the variant helpers, `make ?parts`;
-  `Counter.conv`. The README has a worked example (`test/ppx/`).
+  `Counter.conv`. `Import.def` is the reverse of `Export.def`: a Python
+  function as a typed OCaml function (same parameter combinators). The
+  README has a worked example (`test/ppx/`).
 
 - sboa builds curl-style: `sboa-bundle discover` (the installed launcher of
   the tool, in OCaml) finds the CPython 3.13 (`SBOA_PYTHON`, `SBOA_PREFIX`,

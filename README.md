@@ -25,7 +25,8 @@ or newer.
 
 `[@@deriving sboa]` (the `sboa.ppx` deriver) gives an OCaml type a
 converter, `Sboa.Export.def` registers a function with typed parameters
-(no argument parsing by hand), and `Sboa.Export.stub` writes the `.pyi`.
+(no argument parsing by hand), `Sboa.Import.def` does the reverse for a
+Python function, and `Sboa.Export.stub` writes the `.pyi`.
 This is `test/ppx/demo.ml`, `demo.py` and `demo.pyi`: `make test` runs
 them and checks that this section shows them as they are.
 
@@ -48,11 +49,17 @@ type run_error = { message : string; exit_code : int }
 
 exception Run_error of run_error
 
+(* The other direction: Python's os.path.basename as an OCaml function. *)
+let basename =
+  Sboa.Import.(
+    def ~module_:"os.path" ~name:"basename"
+      (pos "path" Sboa.Conv.string @-> returning Sboa.Conv.string))
+
 let run argv verbose =
   match argv with
   | [] -> raise (Run_error { message = "nothing to run"; exit_code = 2 })
   | cmd :: _ ->
-      let log = if verbose = Some true then "ran " ^ cmd else "" in
+      let log = if verbose = Some true then "ran " ^ basename cmd else "" in
       { output = String.concat " " argv; exit_code = 0; log }
 
 let () =
@@ -67,18 +74,27 @@ let () =
     | _ -> None)
 ```
 
+`basename` is the import direction: `Sboa.Import.def` makes
+`os.path.basename` an OCaml `string -> string`. It takes the GIL with
+`with_gil` (re-entrant, so calling it from an export, as `run` does, is
+fine), imports and caches the callable on the first call, converts the
+arguments with the same `pos`/`kw`/`kw_opt`/`unit` combinators and the
+result with any converter (a derived record accepts any object with the
+attributes, e.g. a dataclass), and raises `Sboa.Python_error` for a Python
+exception, or the original OCaml exception if one crosses back.
+
 In Python (`_demo` is a builtin module of the executable):
 
 ```python
 import _demo
 
-r = _demo.run(["echo", "hi"], verbose=True)
-assert (r.output, r.exit_code, r.log) == ("echo hi", 0, "ran echo")
-assert repr(r) == "RunResult(output='echo hi', exit_code=0, log='ran echo')"
-assert r == _demo.RunResult("echo hi", 0, log="ran echo")
+r = _demo.run(["/bin/echo", "hi"], verbose=True)
+assert (r.output, r.exit_code, r.log) == ("/bin/echo hi", 0, "ran echo")
+assert repr(r) == "RunResult(output='/bin/echo hi', exit_code=0, log='ran echo')"
+assert r == _demo.RunResult("/bin/echo hi", 0, log="ran echo")
 match r:
     case _demo.RunResult(output, 0, _):
-        assert output == "echo hi"
+        assert output == "/bin/echo hi"
 
 try:
     _demo.run([])
@@ -130,6 +146,7 @@ Sboa.Conv.t` (`conv` for a type `t`); a type parameter becomes an argument,
 | a type variable `'a` | the converter argument |
 | `t`, `foo`, `M.t`, `M.foo` (applied to arguments) | `conv`, `foo_conv`, `M.conv`, `M.foo_conv` (applied to their converters), e.g. `Sboa.Counter.conv` |
 | `[@sboa.conv e]` on a type or a field | the converter `e`, e.g. `Sboa.Conv.object_` |
+| `Export.def` / `Import.def` parameters | `pos` positional (positional-only when exported), `kw` keyword(-only), `kw_opt` keyword with `None`/omitted for `None`, `unit` none; the result with `returning` |
 
 A record's class is named after the type in CamelCase (`run_result` ->
 `RunResult`; a type `t` after its module), or `[@@sboa.name "Name"]`; its

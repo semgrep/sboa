@@ -28,7 +28,9 @@
      arguments, runs the entry inside a fresh callable scope, and on any
      OCaml exception sets the Python error indicator ([set_python_error]) and
      returns [None]. [Export.def] builds such an entry from a typed parameter
-     list (a GADT: the conversions run first, then the function).
+     list (a GADT: the conversions run first, then the function);
+     [Import.def] uses the same lists the other way round (OCaml arguments
+     collected, then converted and passed to a cached Python callable).
    - Records (what [[@@deriving sboa]] generates for record types): plain
      Python classes made by a small factory written in Python
      ([factory_source]); an export module that holds some gets a hidden
@@ -259,7 +261,7 @@ module Pair_map = Map.Make (struct
     | c -> c
 end)
 
-module Import = struct
+module Import_ = struct
   let module_ () name =
     match B.import name with
     | m -> m
@@ -957,7 +959,7 @@ module Conv = struct
         let ns = (dict object_).to_py gil [] in
         ignore
           (Object.call gil
-             (Import.cached gil "builtins" "exec")
+             (Import_.cached gil "builtins" "exec")
              ~args:[| string.to_py gil factory_source; ns |]
              ());
         let f =
@@ -975,8 +977,8 @@ module Conv = struct
     | Some c -> c
     | None ->
         let base =
-          if rc.rc_exception then Import.cached gil "_sboa" "OCamlError"
-          else Import.cached gil "builtins" "object"
+          if rc.rc_exception then Import_.cached gil "_sboa" "OCamlError"
+          else Import_.cached gil "builtins" "object"
         in
         let c =
           Object.call gil (get_factory gil)
@@ -998,7 +1000,7 @@ module Conv = struct
     match (rc.rc_class, rc.rc_module) with
     | Some c, _ -> c
     | None, Some m ->
-        ignore (Import.module_ gil m);
+        ignore (Import_.module_ gil m);
         create_class gil rc
     | None, None -> create_class gil rc
 
@@ -1199,7 +1201,7 @@ module Class = struct
 
   let wrap gil c (v : 'a) =
     if not c.imported then begin
-      ignore (Import.module_ gil c.module_);
+      ignore (Import_.module_ gil c.module_);
       c.imported <- true
     end;
     match B.class_wrap c.index (obj_of_value v) with
@@ -1402,9 +1404,14 @@ module Export = struct
     p_classes : record_class list;
   }
 
+  (* An argument of an [Import.def] call. *)
+  type arg = Pos_arg of Object.t | Kw_arg of string * Object.t | Omitted
+
   type 'a param = {
     info : info;
     get : gil -> int -> Object.t array -> (string * Object.t) list -> 'a;
+        (* Python -> OCaml, for [def] *)
+    put : gil -> 'a -> arg; (* OCaml -> Python, for [Import.def] *)
   }
 
   type ('f, 'r) params =
@@ -1423,12 +1430,14 @@ module Export = struct
     {
       info = info name Positional c;
       get = (fun gil i args _ -> Conv.positional gil ~name c.Conv.of_py args i);
+      put = (fun gil x -> Pos_arg (c.Conv.to_py gil x));
     }
 
   let kw name c =
     {
       info = info name Keyword c;
       get = (fun gil _ _ kwargs -> Conv.keyword gil ~name c.Conv.of_py kwargs);
+      put = (fun gil x -> Kw_arg (name, c.Conv.to_py gil x));
     }
 
   let kw_opt name c =
@@ -1436,12 +1445,17 @@ module Export = struct
       info = { (info name Keyword_opt c) with p_ty = Conv.ty_of c ^ " | None" };
       get =
         (fun gil _ _ kwargs -> Conv.keyword_opt gil ~name c.Conv.of_py kwargs);
+      put =
+        (fun gil -> function
+          | None -> Omitted
+          | Some x -> Kw_arg (name, c.Conv.to_py gil x));
     }
 
   let unit =
     {
       info = { p_name = ""; p_kind = No_arg; p_ty = ""; p_classes = [] };
       get = (fun _ _ _ _ -> ());
+      put = (fun _ () -> Omitted);
     }
 
   let returning c = Returning c
@@ -1729,6 +1743,68 @@ module Export = struct
         | Stub_method _ -> ())
       items;
     Buffer.contents b
+end
+
+(* Import, extended with typed calls into Python (it needs Export's
+   parameter lists, hence here). *)
+module Import = struct
+  include Import_
+
+  type 'a param = 'a Export.param
+  type ('f, 'r) params = ('f, 'r) Export.params
+
+  let pos = Export.pos
+  let kw = Export.kw
+  let kw_opt = Export.kw_opt
+  let unit = Export.unit
+  let returning = Export.returning
+  let ( @-> ) = Export.( @-> )
+
+  (* The OCaml function: collect the arguments (unconverted: converting
+     needs the GIL), and at the last one take the GIL, convert, call. *)
+  let rec build : type f r.
+      (f, r) Export.params ->
+      (gil -> Export.arg) list ->
+      (r Conv.t -> (gil -> Export.arg) list -> r) ->
+      f =
+   fun ps acc call ->
+    match ps with
+    | Returning c -> call c acc
+    | Param (p, rest) ->
+        fun x -> build rest ((fun gil -> p.put gil x) :: acc) call
+
+  let def (type f r) ~module_ ~name (params : (f, r) params) : f =
+    let call (ret : r Conv.t) acc =
+      with_gil (fun gil ->
+          let args = List.rev_map (fun put -> put gil) acc in
+          let f = cached gil module_ name in
+          let r =
+            Object.call gil f
+              ~args:
+                (Array.of_list
+                   (List.filter_map
+                      (function
+                        | Export.Pos_arg o -> Some o
+                        | Kw_arg _
+                        | Omitted ->
+                            None)
+                      args))
+              ~kwargs:
+                (List.filter_map
+                   (function
+                     | Export.Kw_arg (k, o) -> Some (k, o)
+                     | Pos_arg _
+                     | Omitted ->
+                         None)
+                   args)
+              ()
+          in
+          Conv.result_of gil ret r)
+    in
+    match params with
+    | Returning _ ->
+        invalid_arg "Sboa.Import.def: no parameter (write unit @-> returning c)"
+    | Param _ -> build params [] call
 end
 
 (* Python class from a dotted name ("pkg.mod.Class"). *)

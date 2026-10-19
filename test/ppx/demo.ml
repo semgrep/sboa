@@ -8,11 +8,17 @@ type run_error = { message : string; exit_code : int }
 
 exception Run_error of run_error
 
+(* The other direction: Python's os.path.basename as an OCaml function. *)
+let basename =
+  Sboa.Import.(
+    def ~module_:"os.path" ~name:"basename"
+      (pos "path" Sboa.Conv.string @-> returning Sboa.Conv.string))
+
 let run argv verbose =
   match argv with
   | [] -> raise (Run_error { message = "nothing to run"; exit_code = 2 })
   | cmd :: _ ->
-      let log = if verbose = Some true then "ran " ^ cmd else "" in
+      let log = if verbose = Some true then "ran " ^ basename cmd else "" in
       { output = String.concat " " argv; exit_code = 0; log }
 
 let () =
